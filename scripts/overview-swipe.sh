@@ -26,7 +26,8 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DIR="${SRC_DIR:-$HOME/src/cosmic-workspaces-epoch}"
 UPSTREAM="https://github.com/pop-os/cosmic-workspaces-epoch"
-PATCHES=("$REPO_DIR"/patches/cosmic-workspaces/*.patch)
+# Patches per upstream revision: patches/cosmic-workspaces/<git rev>/*.patch
+PATCH_ROOT="$REPO_DIR/patches/cosmic-workspaces"
 BIN="$SRC_DIR/target/release/cosmic-workspaces"
 DEST=/usr/local/bin/cosmic-workspaces
 TRY_LINK="$HOME/.local/bin/cosmic-workspaces"
@@ -92,7 +93,13 @@ deps)
         libudev-dev libxkbcommon-dev libwayland-dev
     ;;
 build)
-    patched_build "$SRC_DIR" "$UPSTREAM" overview-swipe cosmic-workspaces "${PATCHES[@]}"
+    rev="$(installed_rev cosmic-workspaces)"
+    if [ ! -d "$PATCH_ROOT/$rev" ]; then
+        echo "no patches for the installed cosmic-workspaces ($rev)." >&2
+        echo "available: $(ls "$PATCH_ROOT" | tr '\n' ' ')" >&2
+        exit 1
+    fi
+    patched_build "$SRC_DIR" "$UPSTREAM" "overview-swipe-$rev" cosmic-workspaces "$PATCH_ROOT/$rev"/*.patch
     echo "built $BIN"
     ;;
 comp-deps)

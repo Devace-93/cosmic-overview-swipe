@@ -7,6 +7,16 @@ Pinned versions (Pop!_OS 24.04, 2026-11-07):
 | `cosmic-comp`       | `0.1~1765324739~24.04~fa88002`        | `fa88002` |
 | `cosmic-workspaces` | `0.1.0~1765315332~24.04~954a45c`      | `954a45c` |
 
+Latest published (2026-11-08, tested in a VM, see below):
+
+| package             | version                               | git rev   |
+|---------------------|---------------------------------------|-----------|
+| `cosmic-comp`       | `0.1~1793802426~24.04~ec674cd`        | `ec674cd` |
+| `cosmic-workspaces` | `1.0.12~1790783807~24.04~cb953ea`     | `cb953ea` |
+
+Patches live in `patches/cosmic-workspaces/<rev>/`; `scripts/overview-swipe.sh
+build` picks the directory matching the installed revision.
+
 ## Finding: the fix belongs in `cosmic-workspaces`, not `cosmic-comp`
 
 - `Super+W` runs `WorkspaceOverview: "cosmic-workspaces"`
@@ -34,7 +44,7 @@ Pinned versions (Pop!_OS 24.04, 2026-11-07):
   Wayland client**, so it can create its own `wl_pointer` + swipe gesture
   object and receive the gestures that land on the overview's surfaces.
 
-## The overview patch (`patches/cosmic-workspaces/`, against `cosmic-workspaces-epoch@954a45c`)
+## The overview patch (`patches/cosmic-workspaces/954a45c/`)
 
 - `backend/wayland/mod.rs`: bind `zwp_pointer_gestures_v1`; for each seat
   with a pointer, `get_pointer` + `get_swipe_gesture`; forward
@@ -60,6 +70,35 @@ Pinned versions (Pop!_OS 24.04, 2026-11-07):
   activate the target workspace on release.
 - 3 or 4 fingers both work inside the overview. Outside the overview nothing
   changes (cosmic-comp keeps handling the swipe itself).
+
+## Port to the latest release (`patches/cosmic-workspaces/cb953ea/`)
+
+- Checked on 2026-11-08 in a Pop!_OS 24.04 VM fully upgraded to the latest
+  packages (kernel 7.2.15, `cosmic-comp ec674cd`, `cosmic-workspaces cb953ea`,
+  which is upstream `main` at that date). Stock behaviour is unchanged: a
+  touchpad swipe switches workspaces outside the overview, and does nothing
+  inside it. `cosmic-comp` still skips its own swipe when the overview is
+  open (`src/input/mod.rs`, `workspace_overview_is_open`) and the overview
+  still never binds pointer gestures.
+- `0001` is the original patch rebased; `0002` adapts it to the newer
+  libcosmic/iced:
+  - `Widget::on_event` became `update` (no `event::Status`), and `layout` /
+    `operate` take `&mut self` (`widgets/workspace_strip.rs`).
+  - `widget::Space::new()` is a builder now; `cosmic_theme::Theme::background`
+    is a method taking `transparent: bool`.
+  - The layer surface is created through `cosmic::surface` /
+    `simple_layer_shell` with `LiveSettings`; the negative margin goes into the
+    `SctkLayerSurfaceSettings` returned by its closure.
+  - Upstream now passes `window_id` + a `RectangleTracker` through the view
+    functions; the strip pages pass them on to `toplevel_previews`.
+- Verified in the VM with the laptop touchpad passed through
+  (`virtio-input-host-pci`): vertical layout, 4 fingers, the strip follows the
+  fingers and lands on the right workspace (debug log: `swipe begin ...
+  visible=true` / `swipe end ... -> target N`). Unit tests pass.
+- `cosmic-comp ec674cd` still places layer surfaces with
+  `LayerMap::layer_geometry()` (`src/shell/focus/order.rs`), so the
+  negative-margin workaround below is presumably still needed; not yet
+  re-verified with a build that disables it.
 
 ## What did not work (and why)
 
@@ -166,4 +205,9 @@ Pinned versions (Pop!_OS 24.04, 2026-11-07):
       lands, activates, overview intact after repeated swipes.
 - [x] Tested on the live session (2026-11-07, works well) (`scripts/overview-swipe.sh try`, then
       `mousetouch demo-swipe left 40` or a real touchpad).
-- [ ] Upstream PR to `pop-os/cosmic-workspaces-epoch`.
+- [x] Still broken upstream (latest release, 2026-11-08); patch ported to
+      `cb953ea` and tested in a VM with a real touchpad (vertical layout).
+- [ ] Re-check whether the negative-margin workaround is still needed with
+      `cosmic-comp ec674cd`.
+- [ ] Upstream PR to `pop-os/cosmic-workspaces-epoch` (fork branch
+      `Devace-93/cosmic-workspaces-epoch:overview-swipe-cb953ea`).
