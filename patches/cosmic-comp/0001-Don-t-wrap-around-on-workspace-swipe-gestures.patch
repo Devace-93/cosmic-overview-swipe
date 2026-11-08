@@ -1,0 +1,52 @@
+From 49ec6faaac5610e07470fdae270181080c75643e Mon Sep 17 00:00:00 2001
+From: Enrique Magallon <dev.ace.93.03@gmail.com>
+Date: Sat, 7 Nov 2026 22:33:30 -0600
+Subject: [PATCH] Don't wrap around on workspace swipe gestures
+
+A swipe past the first or last workspace jumped to the other end. Stop at
+the ends instead, like the continuous swipe in the workspace overview.
+Keyboard shortcuts (Super+Ctrl+Left/Right) still wrap around.
+---
+ src/input/actions.rs | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/input/actions.rs b/src/input/actions.rs
+index 4cecbe28..dc37630d 100644
+--- a/src/input/actions.rs
++++ b/src/input/actions.rs
+@@ -1112,6 +1112,11 @@ fn to_next_workspace(
+     let mut workspace = active.checked_add(1).ok_or(InvalidWorkspaceIndex)?;
+ 
+     if workspace >= shell.workspaces.len(&current_output) {
++        // A swipe stops at the last workspace instead of wrapping around to
++        // the first; the keyboard shortcut still wraps.
++        if gesture {
++            return Err(InvalidWorkspaceIndex);
++        }
+         workspace = 0;
+     }
+     if workspace == active {
+@@ -1138,13 +1143,17 @@ fn to_previous_workspace(
+ ) -> Result<Point<i32, Global>, InvalidWorkspaceIndex> {
+     let current_output = seat.active_output();
+     let active = shell.workspaces.active_num(&current_output).1;
+-    let workspace = active.checked_sub(1).unwrap_or(
+-        shell
++    let workspace = match active.checked_sub(1) {
++        Some(workspace) => workspace,
++        // A swipe stops at the first workspace instead of wrapping around to
++        // the last; the keyboard shortcut still wraps.
++        None if gesture => return Err(InvalidWorkspaceIndex),
++        None => shell
+             .workspaces
+             .len(&current_output)
+             .checked_sub(1)
+             .ok_or(InvalidWorkspaceIndex)?,
+-    );
++    };
+ 
+     if workspace == active {
+         return Err(InvalidWorkspaceIndex);
+-- 
+2.43.0
+
