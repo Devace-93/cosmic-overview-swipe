@@ -95,10 +95,29 @@ build` picks the directory matching the installed revision.
   (`virtio-input-host-pci`): vertical layout, 4 fingers, the strip follows the
   fingers and lands on the right workspace (debug log: `swipe begin ...
   visible=true` / `swipe end ... -> target N`). Unit tests pass.
-- `cosmic-comp ec674cd` still places layer surfaces with
-  `LayerMap::layer_geometry()` (`src/shell/focus/order.rs`), so the
-  negative-margin workaround below is presumably still needed; not yet
-  re-verified with a build that disables it.
+- **Crash found and fixed (`0004`)**: with windows on several workspaces the
+  patched overview died on open with `ext_image_copy_capture_session_v1`
+  error 1, "create_frame sent before the previous frame was destroyed"
+  (`WAYLAND_DEBUG=client` showed frame #116 `ready`, the next
+  `create_frame` 0.6 ms later, and the `destroy` of #116 0.3 ms after
+  that). It is an upstream race: cctk destroys the frame only after the
+  `ready` / `failed` handler returns, but `screencopy.rs` requests the next
+  capture from the thread pool (`ready`, immediately when there is no
+  buffer release to wait for) or from inside the handler (`failed` with
+  `BufferConstraints`). Stock hits it less because it captures fewer
+  windows; the swipe also captures the neighbouring workspaces. Fix: the
+  thread pool sends the capture back to the Wayland thread through a
+  calloop channel, so `create_frame` is always processed after the destroy.
+  Verified: overview opened 5/5 times with 3 windows on 3 workspaces (it
+  crashed every time before). Worth its own upstream PR.
+- **Negative-margin workaround**: re-checked with a build that can switch
+  it off (`OVERVIEW_SWIPE_NO_OVERFLOW=1`, test-only). With `cosmic-comp
+  ec674cd`, a synthetic swipe (`mousetouch demo-swipe down 50 4`) with a
+  window preview half past the top edge leaves the sidebar and panel
+  pixel-identical in every frame of a QMP screendump burst, with and
+  without the workaround. So the bounding-box shift no longer happens
+  (vertical layout tested; horizontal not, the VM stays vertical). For the
+  upstream PR the workaround can likely be dropped.
 
 ## What did not work (and why)
 
@@ -207,7 +226,9 @@ build` picks the directory matching the installed revision.
       `mousetouch demo-swipe left 40` or a real touchpad).
 - [x] Still broken upstream (latest release, 2026-11-08); patch ported to
       `cb953ea` and tested in a VM with a real touchpad (vertical layout).
-- [ ] Re-check whether the negative-margin workaround is still needed with
-      `cosmic-comp ec674cd`.
+- [x] Fixed an upstream screencopy race that the swipe made visible (crash
+      on open with windows on several workspaces).
+- [x] Negative-margin workaround not needed with `cosmic-comp ec674cd`
+      (vertical layout; horizontal not tested).
 - [ ] Upstream PR to `pop-os/cosmic-workspaces-epoch` (fork branch
       `Devace-93/cosmic-workspaces-epoch:overview-swipe-cb953ea`).

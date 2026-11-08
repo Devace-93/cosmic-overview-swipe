@@ -1,7 +1,7 @@
 From 2edb6fd9209f20f000493645df343a09764af90e Mon Sep 17 00:00:00 2001
 From: Enrique Magallon <dev.ace.93.03@gmail.com>
 Date: Sat, 7 Nov 2026 18:38:38 -0600
-Subject: [PATCH 1/2] Continuous touchpad swipe between workspaces in the
+Subject: [PATCH 1/4] Continuous touchpad swipe between workspaces in the
  overview
 
 cosmic-comp already forwards 3+ finger swipes to the overview's layer

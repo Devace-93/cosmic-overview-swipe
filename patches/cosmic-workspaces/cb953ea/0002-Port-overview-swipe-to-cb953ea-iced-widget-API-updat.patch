@@ -1,7 +1,7 @@
 From a342e40c3de5da4498c2152a006960b1c5fbfe12 Mon Sep 17 00:00:00 2001
 From: Enrique Magallon <dev.ace.93.03@gmail.com>
 Date: Sun, 8 Nov 2026 12:05:44 -0600
-Subject: [PATCH 2/2] Port overview swipe to cb953ea (iced widget API:
+Subject: [PATCH 2/4] Port overview swipe to cb953ea (iced widget API:
  update/&mut layout)
 
 ---
