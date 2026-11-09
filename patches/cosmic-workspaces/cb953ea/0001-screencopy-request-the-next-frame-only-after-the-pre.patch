@@ -1,7 +1,7 @@
-From 05575602186f2eb2d0b0a51afc5359b5b5e32810 Mon Sep 17 00:00:00 2001
+From 2c6a1c86bbaf2c964850d85d5607619cd89cd165 Mon Sep 17 00:00:00 2001
 From: Enrique Magallon <dev.ace.93.03@gmail.com>
 Date: Sun, 8 Nov 2026 14:35:48 -0600
-Subject: [PATCH 4/4] screencopy: request the next frame only after the
+Subject: [PATCH 1/3] screencopy: request the next frame only after the
  previous one is destroyed
 
 cctk destroys an ext_image_copy_capture_frame_v1 right after the `ready` /
@@ -16,14 +16,14 @@ Send the capture back to the Wayland thread through a calloop channel
 instead, so create_frame is always processed after the destroy.
 ---
  src/backend/wayland/mod.rs        | 21 +++++++++++++++++++++
- src/backend/wayland/screencopy.rs | 23 ++++++++++++-----------
- 2 files changed, 33 insertions(+), 11 deletions(-)
+ src/backend/wayland/screencopy.rs | 29 +++++++++++++++--------------
+ 2 files changed, 36 insertions(+), 14 deletions(-)
 
 diff --git a/src/backend/wayland/mod.rs b/src/backend/wayland/mod.rs
-index c9affbd..13752be 100644
+index 937622d..61c6e68 100644
 --- a/src/backend/wayland/mod.rs
 +++ b/src/backend/wayland/mod.rs
-@@ -77,6 +77,9 @@ pub struct AppData {
+@@ -74,6 +74,9 @@ pub struct AppData {
      dmabuf_feedback: Option<DmabufFeedback>,
      gbm_devices: GbmDevices,
      thread_pool: ThreadPool,
@@ -31,9 +31,9 @@ index c9affbd..13752be 100644
 +    /// (see `screencopy::ready`).
 +    recapture_sender: calloop::channel::Sender<std::sync::Weak<Capture>>,
      vulkan: Option<vulkan::Vulkan>,
-     pointer_gestures: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
-     // Our own `wl_pointer` per seat, used only to get touchpad swipe gestures.
-@@ -334,6 +337,9 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
+ }
+ 
+@@ -298,6 +301,9 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
              );
          }
  
@@ -43,15 +43,15 @@ index c9affbd..13752be 100644
          let registry_state = RegistryState::new(&globals);
          let mut app_data = AppData {
              qh: qh.clone(),
-@@ -351,6 +357,7 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
+@@ -315,6 +321,7 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
              dmabuf_feedback: None,
              gbm_devices: GbmDevices::default(),
              thread_pool,
 +            recapture_sender,
              vulkan: vulkan.ok(),
-             pointer_gestures,
-             gesture_pointers: HashMap::new(),
-@@ -371,6 +378,20 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
+         };
+ 
+@@ -333,6 +340,20 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
                  }
              })
              .unwrap();
@@ -73,7 +73,7 @@ index c9affbd..13752be 100644
          loop {
              event_loop.dispatch(None, &mut app_data).unwrap();
 diff --git a/src/backend/wayland/screencopy.rs b/src/backend/wayland/screencopy.rs
-index b9692e0..2db0243 100644
+index b9692e0..bdf5d0f 100644
 --- a/src/backend/wayland/screencopy.rs
 +++ b/src/backend/wayland/screencopy.rs
 @@ -50,7 +50,7 @@ impl ScreencopySession {
@@ -85,6 +85,17 @@ index b9692e0..2db0243 100644
          &mut self,
          capture: &Arc<Capture>,
          conn: &Connection,
+@@ -131,8 +131,8 @@ impl ScreencopyHandler for AppData {
+ 
+     fn ready(
+         &mut self,
+-        conn: &Connection,
+-        qh: &QueueHandle<Self>,
++        _conn: &Connection,
++        _qh: &QueueHandle<Self>,
+         capture_frame: &CaptureFrame,
+         frame: Frame,
+     ) {
 @@ -153,21 +153,20 @@ impl ScreencopyHandler for AppData {
          // swap buffers
          session.buffers.as_mut().unwrap().rotate_left(1);
@@ -115,6 +126,15 @@ index b9692e0..2db0243 100644
          });
  
          // Clear `buffer_damage` for front buffer; accumulate for other buffers.
+@@ -215,7 +214,7 @@ impl ScreencopyHandler for AppData {
+ 
+     fn failed(
+         &mut self,
+-        conn: &Connection,
++        _conn: &Connection,
+         _qh: &QueueHandle<Self>,
+         capture_frame: &CaptureFrame,
+         reason: WEnum<FailureReason>,
 @@ -234,7 +233,9 @@ impl ScreencopyHandler for AppData {
              if let Some(formats) = &session.formats {
                  session.buffers = Some(array::from_fn(|_| self.create_buffer(formats)));

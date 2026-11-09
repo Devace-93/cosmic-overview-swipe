@@ -80,22 +80,27 @@ build` picks the directory matching the installed revision.
   inside it. `cosmic-comp` still skips its own swipe when the overview is
   open (`src/input/mod.rs`, `workspace_overview_is_open`) and the overview
   still never binds pointer gestures.
-- `0001` is the original patch rebased; `0002` adapts it to the newer
-  libcosmic/iced:
+- Patch series for `cb953ea` (fork branches in
+  `Devace-93/cosmic-workspaces-epoch`):
+  - `0001` screencopy race fix alone (`fix-screencopy-recapture`).
+  - `0002` the swipe, ported (`overview-touchpad-swipe`): no negative-margin
+    workaround, mouse wheel left as upstream (wraps).
+  - `0003` follows `workspace_wraparound` (`overview-swipe-wraparound`).
+- The port adapts the original patch to the newer libcosmic/iced:
   - `Widget::on_event` became `update` (no `event::Status`), and `layout` /
     `operate` take `&mut self` (`widgets/workspace_strip.rs`).
   - `widget::Space::new()` is a builder now; `cosmic_theme::Theme::background`
     is a method taking `transparent: bool`.
   - The layer surface is created through `cosmic::surface` /
-    `simple_layer_shell` with `LiveSettings`; the negative margin goes into the
-    `SctkLayerSurfaceSettings` returned by its closure.
+    `simple_layer_shell` with `LiveSettings` (upstream's code is kept as is
+    now that the negative margin is gone).
   - Upstream now passes `window_id` + a `RectangleTracker` through the view
     functions; the strip pages pass them on to `toplevel_previews`.
 - Verified in the VM with the laptop touchpad passed through
   (`virtio-input-host-pci`): vertical layout, 4 fingers, the strip follows the
   fingers and lands on the right workspace (debug log: `swipe begin ...
   visible=true` / `swipe end ... -> target N`). Unit tests pass.
-- **Crash found and fixed (`0004`)**: with windows on several workspaces the
+- **Crash found and fixed (`0001`)**: with windows on several workspaces the
   patched overview died on open with `ext_image_copy_capture_session_v1`
   error 1, "create_frame sent before the previous frame was destroyed"
   (`WAYLAND_DEBUG=client` showed frame #116 `ready`, the next
@@ -115,9 +120,17 @@ build` picks the directory matching the installed revision.
   ec674cd`, a synthetic swipe (`mousetouch demo-swipe down 50 4`) with a
   window preview half past the top edge leaves the sidebar and panel
   pixel-identical in every frame of a QMP screendump burst, with and
-  without the workaround. So the bounding-box shift no longer happens
-  (vertical layout tested; horizontal not, the VM stays vertical). For the
-  upstream PR the workaround can likely be dropped.
+  without the workaround, in both vertical and horizontal layouts. So the
+  bounding-box shift no longer happens and the series drops it.
+- **Wraparound (`0003`)**: `cosmic-comp ec674cd` has a
+  `workspace_wraparound` option (`com.system76.CosmicComp/v1/workspaces`,
+  default `true`) used by its next/previous shortcuts and by its own swipe.
+  The overview swipe follows it: on, the strip position is unbounded and
+  pages map to workspaces modulo the count (the settle keeps the lap, so it
+  slides across the seam); off, rubber band at both ends. Verified in the
+  VM with 3 workspaces: on, 1 -> 3 and 3 -> 1; off, stays on 1 and on 3.
+  This also makes the cosmic-comp no-wrap patch below obsolete on new
+  versions (turn the option off instead).
 
 ## What did not work (and why)
 
@@ -181,6 +194,8 @@ build` picks the directory matching the installed revision.
 
 ## cosmic-comp patch: no wrap-around on swipe (`patches/cosmic-comp/`)
 
+Only for older cosmic-comp without the `workspace_wraparound` option.
+
 - Outside the overview, cosmic-comp's 4-finger swipe wraps from the last
   workspace to the first and vice versa: `to_next_workspace` /
   `to_previous_workspace` in `src/input/actions.rs` wrap on purpose, for
@@ -209,8 +224,8 @@ build` picks the directory matching the installed revision.
 - Capture images are Wayland subsurfaces and can't be clipped, so a sliding
   page goes past the strip's padding up to the screen edge (by design it
   moves perpendicular to the workspace bar, so it never covers it).
-- The overview surface is ~2x the output width (see the negative margin
-  above); the extra half is transparent and off-screen.
+- `954a45c` patch only: the overview surface is ~2x the output width (see
+  the negative margin above); the extra half is transparent and off-screen.
 - Which output a swipe applies to comes from the last `CursorEntered`
   layer surface (falls back to the first one). Single monitor: no issue.
 - If cosmic-comp removes an empty workspace while settling, indices shift
@@ -229,6 +244,9 @@ build` picks the directory matching the installed revision.
 - [x] Fixed an upstream screencopy race that the swipe made visible (crash
       on open with windows on several workspaces).
 - [x] Negative-margin workaround not needed with `cosmic-comp ec674cd`
-      (vertical layout; horizontal not tested).
-- [ ] Upstream PR to `pop-os/cosmic-workspaces-epoch` (fork branch
-      `Devace-93/cosmic-workspaces-epoch:overview-swipe-cb953ea`).
+      (vertical and horizontal layouts).
+- [x] Follows `workspace_wraparound` (on by default).
+- [ ] Upstream: not planned for now. The pop-os PR template requires
+      certifying that a PR has no LLM-generated code, comments or
+      descriptions, and this series was written with Claude. Kept here
+      for personal use.
