@@ -151,11 +151,16 @@ try)
     mkdir -p "$(dirname "$TRY_LINK")"
     [ -f "$ENV_FILE" ] || printf '%s\n' 'RUST_LOG=cosmic_workspaces=debug' '#COSMIC_WORKSPACES_SWIPE_MM=20' > "$ENV_FILE"
     rm -f "$TRY_LINK"
+    # Same wrapper as get.sh: runs the build for the installed revision, or
+    # the stock overview after a system update brings a revision without one.
     cat > "$TRY_LINK" <<WRAPPER
 #!/bin/sh
-# overview-swipe try wrapper (remove with: $0 untry)
+# cosmic-overview-swipe wrapper (overview-swipe try wrapper; remove with: $0 untry)
 set -a; [ -f "$ENV_FILE" ] && . "$ENV_FILE"; set +a
-exec "$run_bin" "\$@"
+rev=\$(dpkg-query -W -f='\${Version}' cosmic-workspaces 2>/dev/null | awk -F'~' '{print \$NF}')
+bin="$TRY_DIR/cosmic-workspaces-\$rev"
+[ -n "\$rev" ] && [ -x "\$bin" ] && exec "\$bin" "\$@"
+exec /usr/bin/cosmic-workspaces "\$@"
 WRAPPER
     chmod +x "$TRY_LINK"
     restart_overview

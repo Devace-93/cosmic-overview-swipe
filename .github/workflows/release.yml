@@ -1,0 +1,122 @@
+# Builds the patched COSMIC workspace overview (cosmic-workspaces) for every
+# upstream revision that has a patch series in patches/cosmic-workspaces/,
+# on Ubuntu 24.04 (the base of Pop!_OS 24.04), for x86_64 and aarch64.
+#
+# - Tag push (v*): builds and publishes a GitHub release with one tarball per
+#   revision and architecture plus SHA256SUMS. get.sh installs from it.
+# - Pull requests touching patches/ or this file, and manual runs: build
+#   only, to check that every series still applies and compiles.
+#
+# The binaries are cosmic-workspaces-epoch (GPL-3.0) with our patches, so each
+# tarball ships the GPL text and a SOURCE file naming the exact upstream
+# revision and patch series it was built from.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: ["patches/cosmic-workspaces/**", ".github/workflows/release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  UPSTREAM: https://github.com/pop-os/cosmic-workspaces-epoch
+
+jobs:
+  build:
+    name: Build ${{ matrix.rev }} ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        rev: [954a45c, cb953ea]
+        arch: [x86_64, aarch64]
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+          # Branch of the fork with the same patched tree and its history.
+          - rev: 954a45c
+            fork_branch: overview-swipe-954a45c
+          - rev: cb953ea
+            fork_branch: overview-swipe-wraparound
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libwayland-dev libinput-dev libudev-dev \
+            libegl1-mesa-dev libgbm-dev libexpat1-dev libfontconfig-dev libfreetype-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Upstream at ${{ matrix.rev }} with the patch series
+        run: |
+          set -eu
+          git clone --filter=blob:none "$UPSTREAM" src
+          git -C src checkout --quiet "${{ matrix.rev }}"
+          git -C src -c user.name=ci -c user.email=ci@localhost am "$GITHUB_WORKSPACE"/patches/cosmic-workspaces/${{ matrix.rev }}/*.patch
+          git -C src log --oneline -8
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: ${{ matrix.rev }}
+
+      - name: Build
+        run: cargo build --release --locked --manifest-path src/Cargo.toml
+
+      - name: Package
+        run: |
+          set -eu
+          name=cosmic-workspaces-${{ matrix.rev }}-${{ matrix.arch }}-linux
+          mkdir -p "$name" dist
+          cp src/target/release/cosmic-workspaces "$name/"
+          strip "$name/cosmic-workspaces"
+          cp src/LICENSE "$name/LICENSE-GPL-3.0"
+          {
+            echo "Patched cosmic-workspaces (the COSMIC workspace overview), GPL-3.0."
+            echo "Built from $UPSTREAM at ${{ matrix.rev }}"
+            echo "with the patches in https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}/patches/cosmic-workspaces/${{ matrix.rev }}:"
+            git -C src log --format='  %h %s' "${{ matrix.rev }}..HEAD"
+            echo "The same patched tree, as a git branch: https://github.com/Devace-93/cosmic-workspaces-epoch/tree/${{ matrix.fork_branch }}"
+            echo "Installer and documentation: https://cosmic-swipe.3m4.net"
+          } > "$name/SOURCE"
+          cat "$name/SOURCE"
+          tar czf "dist/$name.tar.gz" "$name"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.rev }}-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
