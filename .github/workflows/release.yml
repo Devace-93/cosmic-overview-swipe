@@ -57,7 +57,7 @@ jobs:
           set -eu
           git clone --filter=blob:none "$UPSTREAM" src
           git -C src checkout --quiet "${{ matrix.rev }}"
-          git -C src -c user.name=ci -c user.email=ci@localhost am patches/cosmic-workspaces/${{ matrix.rev }}/*.patch
+          git -C src -c user.name=ci -c user.email=ci@localhost am "$GITHUB_WORKSPACE"/patches/cosmic-workspaces/${{ matrix.rev }}/*.patch
           git -C src log --oneline -8
 
       - uses: Swatinem/rust-cache@v2
