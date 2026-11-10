@@ -1,0 +1,42 @@
+From 73ed3079e33392c89a3bec02d4a89de596b6f659 Mon Sep 17 00:00:00 2001
+From: Enrique Magallon <dev.ace.93.03@gmail.com>
+Date: Mon, 9 Nov 2026 22:49:34 -0600
+Subject: [PATCH 4/4] Swipe 20 mm per workspace in the overview
+
+60 mm per workspace was four times the finger travel of cosmic-comp's
+own swipe outside the overview (150 accelerated units, about 15 mm).
+Devices that emit synthetic swipes are tuned to the compositor's
+distance, so in the overview a normal stroke moved less than half a
+workspace and snapped back: a Magic Mouse through mousetouch only
+switched with an abrupt flick. 20 mm keeps a real touchpad comfortable
+and brings both distances in line.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Hjqk95EtWyxLg63zr44Nju
+---
+ src/swipe.rs | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/src/swipe.rs b/src/swipe.rs
+index 8f48e6a..35c9b32 100644
+--- a/src/swipe.rs
++++ b/src/swipe.rs
+@@ -22,9 +22,12 @@ use std::{collections::VecDeque, sync::OnceLock, time::Instant};
+ use crate::backend::ExtWorkspaceHandleV1;
+ use cosmic::cctk::wayland_client::protocol::wl_output;
+ 
+-/// Finger travel, in mm, for one full workspace. Override with
+-/// `COSMIC_WORKSPACES_SWIPE_MM` to tune without rebuilding.
+-const DEFAULT_PAGE_MM: f64 = 60.0;
++/// Finger travel, in mm, for one full workspace. Close to cosmic-comp's
++/// own swipe outside the overview (150 accelerated units, ~15 mm), so a
++/// touchpad and synthetic swipes (e.g. mousetouch) feel the same in and out
++/// of the overview. Override with `COSMIC_WORKSPACES_SWIPE_MM` to tune
++/// without rebuilding.
++const DEFAULT_PAGE_MM: f64 = 20.0;
+ /// Velocity samples older than this are ignored (cosmic-comp `HISTORY_LIMIT`).
+ const HISTORY_MS: u32 = 100;
+ /// How far a fling coasts after release: `velocity * PROJECTION_S` pages.
+-- 
+2.43.0
+

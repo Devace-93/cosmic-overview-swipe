@@ -1,48 +1,64 @@
-From 3f6e945fc90a0256d0c67fc436b8b39e20c8be58 Mon Sep 17 00:00:00 2001
+From eeab73eaed2a2a879a457735e6c611eb52686125 Mon Sep 17 00:00:00 2001
 From: Enrique Magallon <dev.ace.93.03@gmail.com>
-Date: Sat, 7 Nov 2026 18:38:38 -0600
-Subject: [PATCH] Continuous touchpad swipe between workspaces in the overview
+Date: Sun, 8 Nov 2026 15:11:52 -0600
+Subject: [PATCH 2/3] Follow the fingers when swiping between workspaces in the
+ overview
 
-cosmic-comp already forwards 3+ finger swipes to the overview's layer
-surface (zwp_pointer_gestures_v1) while it is open, but nothing listened.
-Bind pointer gestures on the wayland thread (same client as iced), track
-the swipe like cosmic-comp's workspace gesture, and show the neighbouring
-workspaces in a strip that follows the fingers, then settles with a
-spring that keeps the release velocity.
+cosmic-comp turns its own workspace swipe off while the overview is open
+and forwards the gesture to the client under the pointer, which is the
+overview. It never bound pointer gestures, so 3/4-finger swipes did nothing
+there.
 
-Neighbouring workspaces' toplevels are captured while the overview is
-open so they are ready when a swipe starts.
+- backend: bind zwp_pointer_gestures_v1, get a swipe gesture per seat and
+  forward begin/update/end as Event::Swipe.
+- swipe.rs: gesture model. Position in pages; pointer deltas are
+  de-accelerated (inverse of libinput's touchpad curve) so a page is a fixed
+  finger travel (60 mm, COSMIC_WORKSPACES_SWIPE_MM); axis lock; rubber band
+  at the ends; release velocity projected and settled with a critically
+  damped spring that keeps the release speed. Natural scrolling follows
+  cosmic-comp's own swipe setting.
+- widgets/workspace_strip.rs: the visible pages side by side, shifted by
+  the fractional position.
+- view: while a swipe or its settle animation runs, show the strip, and
+  highlight the workspace nearest to the strip position in the bar.
+- main: capture the neighbouring workspaces' toplevels while the overview
+  is open (and every workspace the strip passes over), so pages are ready
+  when a swipe starts; activate the target workspace when the animation
+  ends, so empty-workspace bookkeeping does not reflow the bar mid-swipe.
+- Empty workspaces show a faint window outline so motion stays visible.
+
+Outside the overview nothing changes.
 ---
  Cargo.toml                     |   2 +-
  src/backend/mod.rs             |  11 +
- src/backend/wayland/mod.rs     |  87 +++++-
- src/main.rs                    | 265 ++++++++++++++++++-
- src/swipe.rs                   | 466 +++++++++++++++++++++++++++++++++
- src/view/mod.rs                | 132 ++++++++--
+ src/backend/wayland/mod.rs     |  87 ++++++-
+ src/main.rs                    | 216 ++++++++++++++-
+ src/swipe.rs                   | 462 +++++++++++++++++++++++++++++++++
+ src/view/mod.rs                | 149 +++++++++--
  src/widgets/mod.rs             |   2 +
- src/widgets/workspace_strip.rs | 187 +++++++++++++
- 8 files changed, 1107 insertions(+), 45 deletions(-)
+ src/widgets/workspace_strip.rs | 181 +++++++++++++
+ 8 files changed, 1066 insertions(+), 44 deletions(-)
  create mode 100644 src/swipe.rs
  create mode 100644 src/widgets/workspace_strip.rs
 
 diff --git a/Cargo.toml b/Cargo.toml
-index f3d982e..dc99680 100644
+index f42e705..1ddb001 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -25,7 +25,7 @@ freedesktop-icons = { package = "cosmic-freedesktop-icons", git = "https://githu
  
- memmap2 = "0.9.8"
- tokio = "1.47.1"
--wayland-protocols = "0.32.9"
-+wayland-protocols = { version = "0.32.9", features = ["client", "unstable"] }
- delegate = "0.13.4"
+ memmap2 = "0.9.10"
+ tokio = "1.49.0"
+-wayland-protocols = "0.32.10"
++wayland-protocols = { version = "0.32.10", features = ["client", "unstable"] }
+ delegate = "0.13.5"
  itertools = "0.14.0"
- log = "0.4.28"
+ log = "0.4.29"
 diff --git a/src/backend/mod.rs b/src/backend/mod.rs
-index 7e7b083..dc511ea 100644
+index df83810..0f46d68 100644
 --- a/src/backend/mod.rs
 +++ b/src/backend/mod.rs
-@@ -85,6 +85,17 @@ pub enum Event {
+@@ -81,6 +81,17 @@ pub enum Event {
      ToplevelCapabilities(
          Vec<zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1>,
      ),
@@ -61,31 +77,31 @@ index 7e7b083..dc511ea 100644
  
  #[derive(Debug)]
 diff --git a/src/backend/wayland/mod.rs b/src/backend/wayland/mod.rs
-index 654682c..99c8f33 100644
+index 61c6e68..13752be 100644
 --- a/src/backend/wayland/mod.rs
 +++ b/src/backend/wayland/mod.rs
-@@ -15,7 +15,9 @@ use cctk::{
-     toplevel_info::ToplevelInfoState,
-     toplevel_management::ToplevelManagerState,
-     wayland_client::{
--        Connection, Proxy, QueueHandle, globals::registry_queue_init, protocol::wl_seat,
-+        Connection, Dispatch, Proxy, QueueHandle, delegate_noop,
-+        globals::registry_queue_init,
-+        protocol::{wl_pointer, wl_seat},
-     },
-     workspace::WorkspaceState,
- };
-@@ -28,6 +30,9 @@ use cosmic::{
- };
- use futures_channel::mpsc;
- use std::{cell::RefCell, collections::HashMap, sync::Arc, thread};
+@@ -12,8 +12,8 @@ use cctk::sctk::{self};
+ use cctk::toplevel_info::ToplevelInfoState;
+ use cctk::toplevel_management::ToplevelManagerState;
+ use cctk::wayland_client::globals::registry_queue_init;
+-use cctk::wayland_client::protocol::wl_seat;
+-use cctk::wayland_client::{Connection, Proxy, QueueHandle};
++use cctk::wayland_client::protocol::{wl_pointer, wl_seat};
++use cctk::wayland_client::{Connection, Dispatch, Proxy, QueueHandle, delegate_noop};
+ use cctk::workspace::WorkspaceState;
+ use cosmic::cctk;
+ use cosmic::iced::futures::channel::mpsc;
+@@ -25,6 +25,9 @@ use std::collections::HashMap;
+ use std::hash::Hash;
+ use std::sync::Arc;
+ use std::thread;
 +use wayland_protocols::wp::pointer_gestures::zv1::client::{
 +    zwp_pointer_gesture_swipe_v1, zwp_pointer_gestures_v1,
 +};
  
  mod buffer;
  use buffer::Buffer;
-@@ -42,7 +47,7 @@ mod toplevel;
+@@ -39,7 +42,7 @@ mod toplevel;
  mod vulkan;
  mod workspace;
  
@@ -93,10 +109,10 @@ index 654682c..99c8f33 100644
 +use super::{CaptureFilter, CaptureImage, Cmd, Event, SwipeEvent};
  
  pub fn subscription(conn: Connection) -> iced::Subscription<Event> {
-     iced::Subscription::run_with_id("wayland-sub", async { start(conn) }.flatten_stream())
-@@ -65,6 +70,17 @@ pub struct AppData {
-     gbm_devices: GbmDevices,
-     thread_pool: futures_executor::ThreadPool,
+     #[derive(Clone)]
+@@ -78,6 +81,17 @@ pub struct AppData {
+     /// (see `screencopy::ready`).
+     recapture_sender: calloop::channel::Sender<std::sync::Weak<Capture>>,
      vulkan: Option<vulkan::Vulkan>,
 +    pointer_gestures: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
 +    // Our own `wl_pointer` per seat, used only to get touchpad swipe gestures.
@@ -112,7 +128,7 @@ index 654682c..99c8f33 100644
  }
  
  impl AppData {
-@@ -253,18 +269,36 @@ impl SeatHandler for AppData {
+@@ -256,18 +270,36 @@ impl SeatHandler for AppData {
      fn new_capability(
          &mut self,
          _: &Connection,
@@ -154,7 +170,7 @@ index 654682c..99c8f33 100644
      }
  }
  
-@@ -281,6 +315,10 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
+@@ -284,6 +316,10 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
      let qh = event_queue.handle();
  
      let dmabuf_state = DmabufState::new(&globals, &qh);
@@ -165,16 +181,16 @@ index 654682c..99c8f33 100644
      if let Err(err) = dmabuf_state.get_default_feedback(&qh) {
          log::warn!("dmabuf feedback not supported, only shm: {}", err);
      }
-@@ -311,6 +349,8 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
-             gbm_devices: GbmDevices::default(),
+@@ -323,6 +359,8 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
              thread_pool,
-             vulkan: vulkan::Vulkan::new(),
+             recapture_sender,
+             vulkan: vulkan.ok(),
 +            pointer_gestures,
 +            gesture_pointers: HashMap::new(),
          };
  
          let (cmd_sender, cmd_channel) = calloop::channel::channel();
-@@ -341,3 +381,36 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
+@@ -367,3 +405,36 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
  sctk::delegate_registry!(AppData);
  sctk::delegate_seat!(AppData);
  sctk::delegate_shm!(AppData);
@@ -212,19 +228,10 @@ index 654682c..99c8f33 100644
 +    }
 +}
 diff --git a/src/main.rs b/src/main.rs
-index 65fd6db..a531815 100644
+index 4ba8e05..9afb2bc 100644
 --- a/src/main.rs
 +++ b/src/main.rs
-@@ -23,7 +23,7 @@ use cosmic::{
-     },
-     iced_core::window::Id as SurfaceId,
-     iced_runtime::platform_specific::wayland::layer_surface::{
--        IcedOutput, SctkLayerSurfaceSettings,
-+        IcedMargin, IcedOutput, SctkLayerSurfaceSettings,
-     },
-     iced_winit::platform_specific::wayland::commands::layer_surface::{
-         destroy_layer_surface, get_layer_surface,
-@@ -50,6 +50,7 @@ mod backend;
+@@ -49,6 +49,7 @@ mod backend;
  mod view;
  use backend::{ExtForeignToplevelHandleV1, ExtWorkspaceHandleV1, ToplevelInfo};
  mod dnd;
@@ -233,28 +240,18 @@ index 65fd6db..a531815 100644
  mod widgets;
  use dnd::{DragSurface, DragToplevel, DragWorkspace, DropTarget};
 @@ -118,6 +119,8 @@ enum Msg {
-     DBus(dbus::Event),
      PanelContainerEntries(Vec<String>),
      PanelConfig(CosmicPanelConfig),
+     ActionOnTyping(String),
 +    PointerSurface(SurfaceId),
 +    Frame,
      Ignore,
+     Rectangle(RectangleUpdate<RectId>),
  }
- 
-@@ -168,6 +171,9 @@ struct Output {
- #[derive(Debug)]
- struct LayerSurface {
-     output: wl_output::WlOutput,
-+    /// How far the surface extends past the output on the left/top (see
-+    /// `create_surface`); the view pads its content by this much.
-+    overflow: iced::Padding,
-     // for transitions, would need windows in more than one workspace? But don't capture all of
-     // them all the time every frame.
- }
-@@ -198,6 +204,13 @@ struct App {
-     scroll: DiscreteScrollState,
-     dbus_interface: Option<dbus::Interface>,
-     panel_configs: HashMap<String, Option<CosmicPanelConfig>>,
+@@ -212,6 +215,13 @@ struct App {
+     rectangle_tracker: Option<RectangleTracker<RectId>>,
+     rects: HashMap<RectId, Rectangle>,
+     sub_ctr: u128,
 +    swipe_deaccel: swipe::Deaccel,
 +    natural_scroll: bool,
 +    /// Layer surface the pointer was last on, to know which output a
@@ -265,62 +262,8 @@ index 65fd6db..a531815 100644
  }
  
  #[derive(Debug, Default)]
-@@ -232,10 +245,45 @@ impl Toplevels {
- impl App {
-     fn create_surface(&mut self, output: wl_output::WlOutput) -> Task<cosmic::Action<Msg>> {
-         let id = SurfaceId::unique();
-+        // During a swipe the outgoing workspace slides off the left (or top)
-+        // edge. Its window previews are subsurfaces, and cosmic-comp places
-+        // a layer surface by its bounding box including subsurfaces
-+        // (smithay `LayerMap::layer_geometry`), so a subsurface at a
-+        // negative x would shift the whole overview. Extending the surface
-+        // one output past that edge with a negative margin keeps every
-+        // subsurface at non-negative coordinates.
-+        let (width, height) = self
-+            .outputs
-+            .iter()
-+            .find(|o| o.handle == output)
-+            .map_or((0, 0), |o| (o.width, o.height));
-+        let (overflow, margin) = match self.conf.workspace_config.workspace_layout {
-+            cosmic_comp_config::workspace::WorkspaceLayout::Horizontal => {
-+                let w = width + swipe::OVERFLOW_SLACK;
-+                (
-+                    iced::Padding::ZERO.left(w as f32),
-+                    IcedMargin {
-+                        left: -w,
-+                        ..Default::default()
-+                    },
-+                )
-+            }
-+            cosmic_comp_config::workspace::WorkspaceLayout::Vertical => {
-+                let h = height + swipe::OVERFLOW_SLACK;
-+                (
-+                    iced::Padding::ZERO.top(h as f32),
-+                    IcedMargin {
-+                        top: -h,
-+                        ..Default::default()
-+                    },
-+                )
-+            }
-+        };
-         self.layer_surfaces.insert(
-             id,
-             LayerSurface {
-                 output: output.clone(),
-+                overflow,
-             },
-         );
-         get_layer_surface(SctkLayerSurfaceSettings {
-@@ -246,6 +294,7 @@ impl App {
-             size: Some((None, None)),
-             output: IcedOutput::Output(output),
-             anchor: Anchor::all(),
-+            margin,
-             ..Default::default()
-         })
-     }
-@@ -304,6 +353,8 @@ impl App {
-         }
+@@ -353,6 +363,8 @@ impl App {
+         self.action_on_typing_activated = false;
  
          self.visible = false;
 +        self.swipe = None;
@@ -328,7 +271,7 @@ index 65fd6db..a531815 100644
          self.update_capture_filter();
          self.drag_surface = None;
          Task::batch(
-@@ -320,18 +371,61 @@ impl App {
+@@ -369,18 +381,61 @@ impl App {
          }
      }
  
@@ -397,7 +340,7 @@ index 65fd6db..a531815 100644
          }
  
          // Drop `CaptureImage` for workspaces and toplevels not matching new
-@@ -351,6 +445,122 @@ impl App {
+@@ -400,6 +455,122 @@ impl App {
          self.send_wayland_cmd(backend::Cmd::CaptureFilter(capture_filter));
      }
  
@@ -520,7 +463,7 @@ index 65fd6db..a531815 100644
      fn panel_regions(&self, output_handle: &wl_output::WlOutput) -> iced::Padding {
          let Some(output) = self.outputs.iter().find(|o| o.handle == *output_handle) else {
              return iced::Padding::ZERO;
-@@ -571,6 +781,9 @@ impl Application for App {
+@@ -779,6 +950,9 @@ impl Application for App {
                      backend::Event::ToplevelCapabilities(capabilities) => {
                          self.toplevel_capabilities = capabilities;
                      }
@@ -530,7 +473,7 @@ index 65fd6db..a531815 100644
                  }
              }
              Msg::Close => {
-@@ -656,6 +869,14 @@ impl Application for App {
+@@ -931,6 +1105,14 @@ impl Application for App {
              }
              Msg::CompConfig(c) => {
                  self.conf.workspace_config = c.workspaces;
@@ -545,26 +488,9 @@ index 65fd6db..a531815 100644
              }
              Msg::BgConfig(c) => {
                  self.conf.bg = c;
-@@ -673,10 +894,14 @@ impl Application for App {
-                     // TODO assumes only one active workspace per output
-                     let workspaces = self.workspaces.for_output(&output).collect::<Vec<_>>();
-                     if let Some(workspace_idx) = workspaces.iter().position(|i| i.is_active()) {
--                        // Add delta_num, to index wrapping around
-+                        // Stop at the first/last workspace instead of wrapping
-+                        // around, like the touchpad swipe.
-                         let new_workspace_idx = (workspace_idx as isize - discrete_delta.y)
--                            .rem_euclid(workspaces.len() as isize)
-+                            .clamp(0, workspaces.len() as isize - 1)
-                             as usize;
-+                        if new_workspace_idx == workspace_idx {
-+                            return Task::none();
-+                        }
-                         let workspace = workspaces[new_workspace_idx];
-                         self.send_wayland_cmd(backend::Cmd::ActivateWorkspace(
-                             workspace.handle().clone(),
-@@ -750,6 +975,20 @@ impl Application for App {
-             Msg::PanelConfig(config) => {
-                 self.panel_configs.insert(config.name.clone(), Some(config));
+@@ -1048,6 +1230,20 @@ impl Application for App {
+                 }
+                 self.action_on_typing_activated = true;
              }
 +            Msg::PointerSurface(id) => {
 +                self.pointer_surface = Some(id);
@@ -583,7 +509,7 @@ index 65fd6db..a531815 100644
              Msg::Ignore => {}
          }
  
-@@ -768,7 +1007,8 @@ impl Application for App {
+@@ -1066,7 +1262,8 @@ impl Application for App {
      }
  
      fn subscription(&self) -> Subscription<Msg> {
@@ -593,7 +519,7 @@ index 65fd6db..a531815 100644
              iced::Event::PlatformSpecific(iced::event::PlatformSpecific::Wayland(evt)) => {
                  if !matches!(evt, WaylandEvent::RequestResize) {
                      Some(Msg::WaylandEvent(evt))
-@@ -837,6 +1077,9 @@ impl Application for App {
+@@ -1140,6 +1337,9 @@ impl Application for App {
          if let Some(interface) = &self.dbus_interface {
              subscriptions.push(interface.subscription().map(Msg::DBus));
          }
@@ -605,10 +531,10 @@ index 65fd6db..a531815 100644
      }
 diff --git a/src/swipe.rs b/src/swipe.rs
 new file mode 100644
-index 0000000..905933e
+index 0000000..40968a4
 --- /dev/null
 +++ b/src/swipe.rs
-@@ -0,0 +1,466 @@
+@@ -0,0 +1,462 @@
 +//! Continuous touchpad swipe between workspaces while the overview is open.
 +//!
 +//! Positions are in "pages": workspace indices on the output, as `f32`, so
@@ -667,10 +593,6 @@ index 0000000..905933e
 +            .unwrap_or(DEFAULT_PAGE_MM)
 +    })
 +}
-+
-+/// Extra margin past the output edge (logical px), for the strip's gap and
-+/// padding, so off-screen pages stay within the surface.
-+pub const OVERFLOW_SLACK: i32 = 64;
 +
 +pub fn layout_axis(layout: WorkspaceLayout) -> Axis {
 +    match layout {
@@ -1076,10 +998,10 @@ index 0000000..905933e
 +    }
 +}
 diff --git a/src/view/mod.rs b/src/view/mod.rs
-index 9d1363f..4b98bfe 100644
+index ae2b727..02179b2 100644
 --- a/src/view/mod.rs
 +++ b/src/view/mod.rs
-@@ -98,6 +98,17 @@ pub(crate) fn layer_surface<'a>(
+@@ -92,6 +92,17 @@ pub(crate) fn layer_surface<'a>(
          .flat_map(|t| &t.info.workspace)
          .collect::<HashSet<_>>();
      let layout = app.conf.workspace_config.workspace_layout;
@@ -1094,13 +1016,13 @@ index 9d1363f..4b98bfe 100644
 +        let idx = (pos.round().max(0.0) as usize).min(workspaces.len().checked_sub(1)?);
 +        Some(workspaces[idx].handle())
 +    });
+     // track this rectangle
      let sidebar = workspaces_sidebar(
          app.workspaces.for_output(&surface.output),
-         &workspaces_with_toplevels,
-@@ -105,27 +116,44 @@ pub(crate) fn layer_surface<'a>(
-         layout,
-         app.drop_target.as_ref(),
+@@ -102,29 +113,58 @@ pub(crate) fn layer_surface<'a>(
          drag_workspace,
+         window_id,
+         rectangle_track,
 +        highlight,
      );
 -    let toplevels = toplevel_previews(
@@ -1117,6 +1039,8 @@ index 9d1363f..4b98bfe 100644
 -        }),
 -        layout,
 -        drag_toplevel,
+-        window_id,
+-        rectangle_track,
 -    );
 +    let toplevels_on = move |workspace: &'a backend::ExtWorkspaceHandleV1| {
 +        app.toplevels.0.iter().filter(move |i| {
@@ -1142,6 +1066,8 @@ index 9d1363f..4b98bfe 100644
 +                    toplevels_on(workspaces[idx].handle()),
 +                    layout,
 +                    drag_toplevel,
++                    window_id,
++                    rectangle_track,
 +                );
 +                (offset, page)
 +            })
@@ -1150,28 +1076,26 @@ index 9d1363f..4b98bfe 100644
 +        crate::widgets::workspace_strip(pages, crate::swipe::layout_axis(layout), width, height)
 +            .into()
 +    } else if let Some(workspace) = first_active_workspace {
-+        toplevel_previews(toplevels_on(workspace.handle()), layout, drag_toplevel)
++        toplevel_previews(
++            toplevels_on(workspace.handle()),
++            layout,
++            drag_toplevel,
++            window_id,
++            rectangle_track,
++        )
 +    } else {
-+        toplevel_previews(std::iter::empty(), layout, drag_toplevel)
++        toplevel_previews(
++            std::iter::empty(),
++            layout,
++            drag_toplevel,
++            window_id,
++            rectangle_track,
++        )
 +    };
      let toplevels = if let Some(workspace) = first_active_workspace {
          dnd_destination_for_target(
              DropTarget::OutputToplevels(workspace.handle().clone(), surface.output.clone()),
-@@ -152,7 +180,12 @@ pub(crate) fn layer_surface<'a>(
-     };
- 
-     let panel_regions = app.panel_regions(&surface.output);
--    let container = widget::container(container).padding(panel_regions);
-+    let padding = iced::Padding {
-+        top: panel_regions.top + surface.overflow.top,
-+        left: panel_regions.left + surface.overflow.left,
-+        ..panel_regions
-+    };
-+    let container = widget::container(container).padding(padding);
- 
-     let output = surface.output.clone();
-     widget::mouse_area(container)
-@@ -247,6 +280,7 @@ fn workspace_item(
+@@ -244,6 +284,7 @@ fn workspace_item(
      layout: WorkspaceLayout,
      is_drop_target: bool,
      has_workspace_drag: bool,
@@ -1179,7 +1103,7 @@ index 9d1363f..4b98bfe 100644
  ) -> cosmic::Element<'static, Msg> {
      let (mut image, image_height, image_width) = if let Some(img) = workspace.img.as_ref() {
          let is_rotated = matches!(
-@@ -310,7 +344,7 @@ fn workspace_item(
+@@ -305,7 +346,7 @@ fn workspace_item(
          .max_height(image_height + 28.0)
          .max_width(image_width);
  
@@ -1188,16 +1112,16 @@ index 9d1363f..4b98bfe 100644
      // TODO editable name?
      let mut button = widget::button::custom(content)
          .selected(is_active)
-@@ -357,7 +391,7 @@ fn workspace_drag_placeholder(
-         })
-         .padding(8);
+@@ -357,7 +398,7 @@ fn workspace_drag_placeholder(
+     })
+     .padding(8);
      let placeholder = crate::widgets::match_size(
 -        workspace_item(other_workspace, other_output, layout, true, true),
 +        workspace_item(other_workspace, other_output, layout, true, true, false),
          placeholder,
      );
      dnd_destination_for_target(drop_target, placeholder.into(), Msg::DndWorkspaceDrop)
-@@ -370,6 +404,7 @@ fn workspace_sidebar_entry<'a>(
+@@ -370,6 +411,7 @@ fn workspace_sidebar_entry<'a>(
      is_drop_target: bool,
      has_toplevels: bool,
      has_workspace_drag: bool,
@@ -1205,7 +1129,7 @@ index 9d1363f..4b98bfe 100644
  ) -> cosmic::Element<'a, Msg> {
      /* XXX
      let mouse_interaction = if is_drop_target {
-@@ -384,6 +419,7 @@ fn workspace_sidebar_entry<'a>(
+@@ -384,6 +426,7 @@ fn workspace_sidebar_entry<'a>(
          layout,
          is_drop_target,
          has_workspace_drag,
@@ -1213,7 +1137,7 @@ index 9d1363f..4b98bfe 100644
      );
      let item = iced::widget::mouse_area(item)
          .on_enter(Msg::EnteredWorkspaceSidebarEntry(
-@@ -415,7 +451,7 @@ fn workspace_sidebar_entry<'a>(
+@@ -415,7 +458,7 @@ fn workspace_sidebar_entry<'a>(
              DragSurface::Workspace(workspace.handle().clone()),
              Some(workspace.dnd_source_id.clone()),
              destination,
@@ -1222,24 +1146,24 @@ index 9d1363f..4b98bfe 100644
          )
      } else {
          destination
-@@ -430,6 +466,7 @@ fn workspaces_sidebar<'a>(
-     layout: WorkspaceLayout,
-     drop_target: Option<&DropTarget>,
+@@ -432,6 +475,7 @@ fn workspaces_sidebar<'a>(
      drag_workspace: Option<&'a backend::ExtWorkspaceHandleV1>,
+     window_id: window::Id,
+     rectangle_track: &rectangle_tracker::RectangleTracker<RectId>,
 +    highlight: Option<&backend::ExtWorkspaceHandleV1>,
  ) -> cosmic::Element<'a, Msg> {
      let mut sidebar_entries = Vec::new();
      for workspace in workspaces {
-@@ -442,7 +479,7 @@ fn workspaces_sidebar<'a>(
-                 DragSurface::Workspace(workspace.handle().clone()),
-                 Some(workspace.dnd_source_id.clone()),
-                 widget::Space::new(Length::Shrink, Length::Shrink).into(),
+@@ -447,7 +491,7 @@ fn workspaces_sidebar<'a>(
+                     .width(Length::Shrink)
+                     .height(Length::Shrink)
+                     .into(),
 -                move || workspace_item(&workspace_clone, &output_clone, layout, false, true),
 +                move || workspace_item(&workspace_clone, &output_clone, layout, false, true, false),
              );
              sidebar_entries.push(source);
              continue;
-@@ -477,6 +514,7 @@ fn workspaces_sidebar<'a>(
+@@ -482,6 +526,7 @@ fn workspaces_sidebar<'a>(
              drop_target_is_workspace && drag_workspace.is_none(),
              workspaces_with_toplevels.contains(workspace.handle()),
              drag_workspace.is_some(),
@@ -1247,9 +1171,9 @@ index 9d1363f..4b98bfe 100644
          ));
      }
      let (axis, width, height) = match layout {
-@@ -602,16 +640,18 @@ fn toplevel_previews<'a>(
-     layout: WorkspaceLayout,
-     drag_toplevel: Option<&'a backend::ExtForeignToplevelHandleV1>,
+@@ -643,11 +688,8 @@ fn toplevel_previews<'a>(
+     window_id: window::Id,
+     rectangle_track: &rectangle_tracker::RectangleTracker<RectId>,
  ) -> cosmic::Element<'a, Msg> {
 -    let (width, height) = match layout {
 -        WorkspaceLayout::Vertical => (Length::FillPortion(4), Length::Fill),
@@ -1258,7 +1182,12 @@ index 9d1363f..4b98bfe 100644
 -    let entries = toplevels
 +    let (width, height) = toplevel_previews_size(layout);
 +    let entries: Vec<_> = toplevels
-         .map(|t| toplevel_previews_entry(t, drag_toplevel == Some(&t.handle)))
+         .map(|t| {
+             toplevel_previews_entry(
+                 t,
+@@ -657,9 +699,14 @@ fn toplevel_previews<'a>(
+             )
+         })
          .collect();
 +    let content = if entries.is_empty() {
 +        empty_workspace_placeholder()
@@ -1272,33 +1201,41 @@ index 9d1363f..4b98bfe 100644
              .align_x(Alignment::Center)
              .width(width)
              .height(height)
-@@ -623,6 +663,46 @@ fn toplevel_previews<'a>(
+@@ -669,6 +716,54 @@ fn toplevel_previews<'a>(
      .into()
  }
  
 +/// Outline of an empty window, so an empty workspace still shows movement
 +/// while swiping past it (otherwise every empty page looks identical).
 +fn empty_workspace_placeholder() -> cosmic::Element<'static, Msg> {
-+    let outline = widget::container(widget::Space::new(Length::Fill, Length::Fill))
-+        .width(Length::FillPortion(2))
-+        .height(Length::FillPortion(2))
-+        .class(cosmic::theme::Container::custom(|theme| {
-+            let cosmic = theme.cosmic();
-+            let mut border_color: iced::Color = cosmic.on_bg_color().into();
-+            border_color.a = 0.35;
-+            let mut background: iced::Color = cosmic.background.base.into();
-+            background.a = 0.25;
-+            cosmic::iced::widget::container::Style {
-+                background: Some(background.into()),
-+                border: Border {
-+                    color: border_color,
-+                    width: 2.0,
-+                    radius: cosmic.radius_s().map(|x| x + 4.0).into(),
-+                },
-+                ..Default::default()
-+            }
-+        }));
-+    let spacer = || widget::Space::new(Length::FillPortion(1), Length::FillPortion(1));
++    let outline = widget::container(
++        widget::Space::new()
++            .width(Length::Fill)
++            .height(Length::Fill),
++    )
++    .width(Length::FillPortion(2))
++    .height(Length::FillPortion(2))
++    .class(cosmic::theme::Container::custom(|theme| {
++        let cosmic = theme.cosmic();
++        let mut border_color: iced::Color = cosmic.on_bg_color().into();
++        border_color.a = 0.35;
++        let mut background: iced::Color = cosmic.background(false).base.into();
++        background.a = 0.25;
++        cosmic::iced::widget::container::Style {
++            background: Some(background.into()),
++            border: Border {
++                color: border_color,
++                width: 2.0,
++                radius: cosmic.radius_s().map(|x| x + 4.0).into(),
++            },
++            ..Default::default()
++        }
++    }));
++    let spacer = || {
++        widget::Space::new()
++            .width(Length::FillPortion(1))
++            .height(Length::FillPortion(1))
++    };
 +    column![
 +        spacer(),
 +        row![spacer(), outline, spacer()].height(Length::FillPortion(2)),
@@ -1320,10 +1257,10 @@ index 9d1363f..4b98bfe 100644
      if let Some(image) = image {
          #[cfg(feature = "no-subsurfaces")]
 diff --git a/src/widgets/mod.rs b/src/widgets/mod.rs
-index cbb835c..485478d 100644
+index 0d55896..f6054bf 100644
 --- a/src/widgets/mod.rs
 +++ b/src/widgets/mod.rs
-@@ -20,6 +20,8 @@ mod visibility_wrapper;
+@@ -16,6 +16,8 @@ mod visibility_wrapper;
  pub use visibility_wrapper::visibility_wrapper;
  mod match_size;
  pub use match_size::match_size;
@@ -1334,10 +1271,10 @@ index cbb835c..485478d 100644
  #[allow(dead_code)]
 diff --git a/src/widgets/workspace_strip.rs b/src/widgets/workspace_strip.rs
 new file mode 100644
-index 0000000..b2e6e8a
+index 0000000..203bec1
 --- /dev/null
 +++ b/src/widgets/workspace_strip.rs
-@@ -0,0 +1,187 @@
+@@ -0,0 +1,181 @@
 +//! A row (or column) of full-size pages, each shifted along `axis` by a
 +//! fractional number of pages. Used to show the workspaces next to the
 +//! active one while a touchpad swipe moves between them.
@@ -1360,7 +1297,7 @@ index 0000000..b2e6e8a
 +        mouse, renderer,
 +        widget::{Operation, Tree},
 +    },
-+    event::{self, Event},
++    event::Event,
 +};
 +
 +const GAP: f32 = 24.0;
@@ -1395,21 +1332,22 @@ index 0000000..b2e6e8a
 +    }
 +
 +    fn layout(
-+        &self,
++        &mut self,
 +        tree: &mut Tree,
 +        renderer: &cosmic::Renderer,
 +        limits: &layout::Limits,
 +    ) -> layout::Node {
 +        let size = limits.resolve(self.width, self.height, Size::ZERO);
 +        let child_limits = layout::Limits::new(Size::ZERO, size);
++        let axis = &self.axis;
 +        let children = self
 +            .children
-+            .iter()
++            .iter_mut()
 +            .zip(&mut tree.children)
 +            .zip(&self.offsets)
 +            .map(|((child, tree), offset)| {
-+                let node = child.as_widget().layout(tree, renderer, &child_limits);
-+                let position = match self.axis {
++                let node = child.as_widget_mut().layout(tree, renderer, &child_limits);
++                let position = match axis {
 +                    Axis::Horizontal => Point::new(offset * (size.width + GAP), 0.0),
 +                    Axis::Vertical => Point::new(0.0, offset * (size.height + GAP)),
 +                };
@@ -1420,7 +1358,7 @@ index 0000000..b2e6e8a
 +    }
 +
 +    fn operate(
-+        &self,
++        &mut self,
 +        tree: &mut Tree,
 +        layout: Layout<'_>,
 +        renderer: &cosmic::Renderer,
@@ -1428,44 +1366,37 @@ index 0000000..b2e6e8a
 +    ) {
 +        for ((child, tree), layout) in self
 +            .children
-+            .iter()
++            .iter_mut()
 +            .zip(&mut tree.children)
 +            .zip(layout.children())
 +        {
-+            child.as_widget().operate(tree, layout, renderer, operation);
++            child
++                .as_widget_mut()
++                .operate(tree, layout, renderer, operation);
 +        }
 +    }
 +
-+    fn on_event(
++    fn update(
 +        &mut self,
 +        tree: &mut Tree,
-+        event: Event,
++        event: &Event,
 +        layout: Layout<'_>,
 +        cursor: mouse::Cursor,
 +        renderer: &cosmic::Renderer,
 +        clipboard: &mut dyn Clipboard,
 +        shell: &mut Shell<'_, Msg>,
 +        viewport: &Rectangle,
-+    ) -> event::Status {
-+        let mut status = event::Status::Ignored;
++    ) {
 +        for ((child, tree), layout) in self
 +            .children
 +            .iter_mut()
 +            .zip(&mut tree.children)
 +            .zip(layout.children())
 +        {
-+            status = status.merge(child.as_widget_mut().on_event(
-+                tree,
-+                event.clone(),
-+                layout,
-+                cursor,
-+                renderer,
-+                clipboard,
-+                shell,
-+                viewport,
-+            ));
++            child.as_widget_mut().update(
++                tree, event, layout, cursor, renderer, clipboard, shell, viewport,
++            );
 +        }
-+        status
 +    }
 +
 +    fn mouse_interaction(

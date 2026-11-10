@@ -1,0 +1,151 @@
+From 2c6a1c86bbaf2c964850d85d5607619cd89cd165 Mon Sep 17 00:00:00 2001
+From: Enrique Magallon <dev.ace.93.03@gmail.com>
+Date: Sun, 8 Nov 2026 14:35:48 -0600
+Subject: [PATCH 1/3] screencopy: request the next frame only after the
+ previous one is destroyed
+
+cctk destroys an ext_image_copy_capture_frame_v1 right after the `ready` /
+`failed` handler returns, but the next capture was requested from the
+thread pool (`ready`, racing the destroy as soon as there is no buffer to
+wait for) or from inside the handler itself (`failed` with
+BufferConstraints). cosmic-comp then kills the client with
+ext_image_copy_capture_session_v1 error 1, "create_frame sent before the
+previous frame was destroyed".
+
+Send the capture back to the Wayland thread through a calloop channel
+instead, so create_frame is always processed after the destroy.
+---
+ src/backend/wayland/mod.rs        | 21 +++++++++++++++++++++
+ src/backend/wayland/screencopy.rs | 29 +++++++++++++++--------------
+ 2 files changed, 36 insertions(+), 14 deletions(-)
+
+diff --git a/src/backend/wayland/mod.rs b/src/backend/wayland/mod.rs
+index 937622d..61c6e68 100644
+--- a/src/backend/wayland/mod.rs
++++ b/src/backend/wayland/mod.rs
+@@ -74,6 +74,9 @@ pub struct AppData {
+     dmabuf_feedback: Option<DmabufFeedback>,
+     gbm_devices: GbmDevices,
+     thread_pool: ThreadPool,
++    /// Captures to request again, handled on the Wayland thread's event loop
++    /// (see `screencopy::ready`).
++    recapture_sender: calloop::channel::Sender<std::sync::Weak<Capture>>,
+     vulkan: Option<vulkan::Vulkan>,
+ }
+ 
+@@ -298,6 +301,9 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
+             );
+         }
+ 
++        let (recapture_sender, recapture_channel) = calloop::channel::channel();
++        let recapture_conn = conn.clone();
++
+         let registry_state = RegistryState::new(&globals);
+         let mut app_data = AppData {
+             qh: qh.clone(),
+@@ -315,6 +321,7 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
+             dmabuf_feedback: None,
+             gbm_devices: GbmDevices::default(),
+             thread_pool,
++            recapture_sender,
+             vulkan: vulkan.ok(),
+         };
+ 
+@@ -333,6 +340,20 @@ fn start(conn: Connection) -> mpsc::Receiver<Event> {
+                 }
+             })
+             .unwrap();
++        event_loop
++            .handle()
++            .insert_source(recapture_channel, move |event, _, app_data| {
++                if let calloop::channel::Event::Msg(capture) = event {
++                    let Some(capture) = capture.upgrade() else {
++                        return;
++                    };
++                    let mut session = capture.session.lock().unwrap();
++                    if let Some(session) = session.as_mut() {
++                        session.attach_buffer_and_commit(&capture, &recapture_conn, &app_data.qh);
++                    }
++                }
++            })
++            .unwrap();
+ 
+         loop {
+             event_loop.dispatch(None, &mut app_data).unwrap();
+diff --git a/src/backend/wayland/screencopy.rs b/src/backend/wayland/screencopy.rs
+index b9692e0..bdf5d0f 100644
+--- a/src/backend/wayland/screencopy.rs
++++ b/src/backend/wayland/screencopy.rs
+@@ -50,7 +50,7 @@ impl ScreencopySession {
+         }
+     }
+ 
+-    fn attach_buffer_and_commit(
++    pub(super) fn attach_buffer_and_commit(
+         &mut self,
+         capture: &Arc<Capture>,
+         conn: &Connection,
+@@ -131,8 +131,8 @@ impl ScreencopyHandler for AppData {
+ 
+     fn ready(
+         &mut self,
+-        conn: &Connection,
+-        qh: &QueueHandle<Self>,
++        _conn: &Connection,
++        _qh: &QueueHandle<Self>,
+         capture_frame: &CaptureFrame,
+         frame: Frame,
+     ) {
+@@ -153,21 +153,20 @@ impl ScreencopyHandler for AppData {
+         // swap buffers
+         session.buffers.as_mut().unwrap().rotate_left(1);
+ 
+-        // Capture again on damage
+-        let capture_clone = capture.clone();
+-        let conn = conn.clone();
++        // Capture again on damage, once the server released the buffer.
++        // The next frame must not be created before this one is destroyed,
++        // which the toolkit does only after `ready` returns; so the capture is
++        // requested from the Wayland thread's event loop, never from here or
++        // from the thread pool directly.
++        let capture_weak = Arc::downgrade(&capture);
+         let release = session.release.take();
+-        let qh = qh.clone();
++        let recapture = self.recapture_sender.clone();
+         self.thread_pool.spawn_ok(async move {
+             if let Some(release) = release {
+                 // Wait for buffer to be released by server
+                 release.await;
+             }
+-            let mut session = capture_clone.session.lock().unwrap();
+-            let Some(session) = session.as_mut() else {
+-                return;
+-            };
+-            session.attach_buffer_and_commit(&capture_clone, &conn, &qh);
++            let _ = recapture.send(capture_weak);
+         });
+ 
+         // Clear `buffer_damage` for front buffer; accumulate for other buffers.
+@@ -215,7 +214,7 @@ impl ScreencopyHandler for AppData {
+ 
+     fn failed(
+         &mut self,
+-        conn: &Connection,
++        _conn: &Connection,
+         _qh: &QueueHandle<Self>,
+         capture_frame: &CaptureFrame,
+         reason: WEnum<FailureReason>,
+@@ -234,7 +233,9 @@ impl ScreencopyHandler for AppData {
+             if let Some(formats) = &session.formats {
+                 session.buffers = Some(array::from_fn(|_| self.create_buffer(formats)));
+             }
+-            session.attach_buffer_and_commit(&capture, conn, &self.qh);
++            // Not from inside this handler: the failed frame is destroyed
++            // only after it returns (see `ready`).
++            let _ = self.recapture_sender.send(Arc::downgrade(&capture));
+         } else {
+             // TODO
+             if reason == WEnum::Value(FailureReason::Stopped) {
+-- 
+2.43.0
+
