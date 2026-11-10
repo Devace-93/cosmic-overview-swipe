@@ -70,6 +70,26 @@ build` picks the directory matching the installed revision.
   activate the target workspace on release.
 - 3 or 4 fingers both work inside the overview. Outside the overview nothing
   changes (cosmic-comp keeps handling the swipe itself).
+- Series for this revision (fork branch `overview-swipe-954a45c`), for the
+  laptop, which stays on `cosmic-comp fa88002`:
+  - `0001` the patch above (with the negative-margin workaround, which
+    this cosmic-comp still needs).
+  - `0002`/`0004` the wraparound and 20 mm changes from the `cb953ea`
+    series, cherry-picked.
+  - `0003` this cosmic-comp has no `workspace_wraparound` setting and
+    always wraps its own swipe and shortcuts, so the overview swipe and
+    mouse wheel wrap too; `COSMIC_WORKSPACES_SWIPE_WRAP=0` stops at the
+    ends instead.
+- 2026-11-09 regression and fix: `try` used to point the wrapper at
+  `$SRC_DIR/target/release`. Building the `cb953ea` port in the same
+  checkout replaced that binary, and the next login ran a build without
+  the margin workaround on `cosmic-comp fa88002`: mid-swipe the workspace
+  bar slid sideways (seen on the laptop's internal display with a second
+  monitor attached). `try` now copies the build to
+  `~/.local/opt/overview-swipe/cosmic-workspaces-<rev>` (plus a `.commit`
+  file), refuses a checkout that is not on `overview-swipe-<rev>`, and
+  `restart_overview` matches processes by executable instead of command
+  line (which also matched the calling shell).
 
 ## Port to the latest release (`patches/cosmic-workspaces/cb953ea/`)
 
@@ -155,8 +175,8 @@ build` picks the directory matching the installed revision.
   (`filter-touchpad.c`, `touchpad_accel_profile_linear`) ranges from ~0.09
   to ~1.4 (≈16x), so slow swipes barely moved and fast ones overshot. Fix:
   `swipe::Deaccel` inverts that curve (speed estimated over 40 ms) to get
-  finger travel in mm; one workspace = 60 mm in the `954a45c` patch,
-  20 mm in the `cb953ea` series (`COSMIC_WORKSPACES_SWIPE_MM` to tune).
+  finger travel in mm; one workspace = 60 mm originally, 20 mm now in
+  both series (`COSMIC_WORKSPACES_SWIPE_MM` to tune).
 - **Direction**: first version read `natural_scroll` from the wrong place,
   then "always follow the fingers" broke mousetouch (Magic Mouse): it adapts
   its synthetic swipe to cosmic-comp's convention, so it came out reversed in
@@ -261,7 +281,10 @@ Only for older cosmic-comp without the `workspace_wraparound` option.
       on open with windows on several workspaces).
 - [x] Negative-margin workaround not needed with `cosmic-comp ec674cd`
       (vertical and horizontal layouts).
-- [x] Follows `workspace_wraparound` (on by default).
+- [x] Follows `workspace_wraparound` (on by default); on `954a45c` wraps
+      like that cosmic-comp (`COSMIC_WORKSPACES_SWIPE_WRAP=0` to stop).
+- [x] Laptop runs the `954a45c` series (wraparound + 20 mm) from a stable
+      copy (2026-11-10).
 - [ ] Upstream: not planned for now. The pop-os PR template requires
       certifying that a PR has no LLM-generated code, comments or
       descriptions, and this series was written with Claude. Kept here

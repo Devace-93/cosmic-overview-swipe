@@ -4,8 +4,8 @@
 #
 #   scripts/overview-swipe.sh deps      # apt build dependencies (sudo)
 #   scripts/overview-swipe.sh build     # clone at the installed revision, patch, cargo build
-#   scripts/overview-swipe.sh try       # use the patched build (symlink in ~/.local/bin, no sudo)
-#   scripts/overview-swipe.sh untry     # remove that symlink, back to the stock overview
+#   scripts/overview-swipe.sh try       # use the patched build (copy + wrapper in ~/.local, no sudo)
+#   scripts/overview-swipe.sh untry     # remove them, back to the stock overview
 #   scripts/overview-swipe.sh install   # copy to /usr/local/bin (sudo), shadows the package
 #   scripts/overview-swipe.sh rollback  # remove it (sudo), back to the stock package
 #
@@ -31,6 +31,10 @@ PATCH_ROOT="$REPO_DIR/patches/cosmic-workspaces"
 BIN="$SRC_DIR/target/release/cosmic-workspaces"
 DEST=/usr/local/bin/cosmic-workspaces
 TRY_LINK="$HOME/.local/bin/cosmic-workspaces"
+# `try` runs a copy from here, never the build directory itself: a later
+# `cargo build` there (another branch, another revision) must not change what
+# the session starts at the next login.
+TRY_DIR="$HOME/.local/opt/overview-swipe"
 # cosmic-session doesn't pass `systemctl --user set-environment` vars to its
 # children, so `try` installs a wrapper that sources this file (e.g.
 # RUST_LOG=cosmic_workspaces=debug, COSMIC_WORKSPACES_SWIPE_MM=45).
@@ -55,7 +59,7 @@ patched_build() {
     local rev
     rev="$(installed_rev "$pkg")"
     echo "installed $pkg revision: $rev"
-    [ -d "$dir/.git" ] || git clone "$upstream" "$dir"
+    git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || git clone "$upstream" "$dir"
     cd "$dir"
     if ! git rev-parse -q --verify "$branch" >/dev/null; then
         git fetch origin
@@ -67,18 +71,28 @@ patched_build() {
     cargo build --release
 }
 
+# PIDs of the running overview, by executable (the stock one or a `try`
+# copy). Not by command line: that also matches any shell whose command
+# merely mentions the path, and the process name is cut to 15 characters.
+overview_pids() {
+    local p exe
+    for p in $(pgrep -f cosmic-workspaces); do
+        exe="$(readlink "/proc/$p/exe" 2>/dev/null)" || continue
+        exe="${exe% (deleted)}"
+        case "${exe##*/}" in cosmic-workspaces | cosmic-workspaces-*) echo "$p" ;; esac
+    done
+}
+
 restart_overview() {
     # cosmic-session supervises cosmic-workspaces and respawns it by name
     # through its PATH (~/.local/bin, /usr/local/bin, then /usr/bin) as soon
     # as it exits. So "restart" = kill it and wait for the respawn.
-    # Match on the command line: the process name is truncated to 15 chars.
-    local pattern='(^|/)cosmic-workspaces( |$)'
     local old new
-    old="$(pgrep -f "$pattern" | tr '\n' ' ')"
+    old="$(overview_pids | tr '\n' ' ')"
     [ -n "$old" ] && kill $old
     for _ in $(seq 50); do
         sleep 0.1
-        new="$(pgrep -f "$pattern" | head -1)"
+        new="$(overview_pids | head -1)"
         if [ -n "$new" ] && [[ " $old " != *" $new "* ]]; then
             echo "overview running: pid $new -> $(readlink "/proc/$new/exe")"
             return 0
@@ -122,6 +136,18 @@ comp-rollback)
     ;;
 try)
     [ -x "$BIN" ] || { echo "run '$0 build' first" >&2; exit 1; }
+    rev="$(installed_rev cosmic-workspaces)"
+    branch="$(git -C "$SRC_DIR" branch --show-current)"
+    if [ "$branch" != "overview-swipe-$rev" ]; then
+        echo "$SRC_DIR is on '$branch', not overview-swipe-$rev (the installed revision);" >&2
+        echo "its build may not match this system. Run '$0 build' first." >&2
+        exit 1
+    fi
+    mkdir -p "$TRY_DIR"
+    run_bin="$TRY_DIR/cosmic-workspaces-$rev"
+    # Replace, don't overwrite in place: the running overview keeps its inode.
+    install -m 755 "$BIN" "$run_bin.new" && mv -f "$run_bin.new" "$run_bin"
+    echo "$(git -C "$SRC_DIR" log -1 --format='%h %s')" > "$run_bin.commit"
     mkdir -p "$(dirname "$TRY_LINK")"
     [ -f "$ENV_FILE" ] || printf '%s\n' 'RUST_LOG=cosmic_workspaces=debug' '#COSMIC_WORKSPACES_SWIPE_MM=20' > "$ENV_FILE"
     rm -f "$TRY_LINK"
@@ -129,7 +155,7 @@ try)
 #!/bin/sh
 # overview-swipe try wrapper (remove with: $0 untry)
 set -a; [ -f "$ENV_FILE" ] && . "$ENV_FILE"; set +a
-exec "$BIN" "\$@"
+exec "$run_bin" "\$@"
 WRAPPER
     chmod +x "$TRY_LINK"
     restart_overview
@@ -139,6 +165,7 @@ WRAPPER
     ;;
 untry)
     if grep -qs "overview-swipe try wrapper" "$TRY_LINK" || [ -L "$TRY_LINK" ]; then rm "$TRY_LINK"; fi
+    rm -rf "$TRY_DIR"
     restart_overview
     ;;
 install)

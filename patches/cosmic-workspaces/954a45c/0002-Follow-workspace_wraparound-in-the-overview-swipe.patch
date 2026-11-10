@@ -1,0 +1,363 @@
+From f2fa9f8b715f5d2afba106e08e4a28231372864b Mon Sep 17 00:00:00 2001
+From: Enrique Magallon <dev.ace.93.03@gmail.com>
+Date: Sun, 8 Nov 2026 17:59:47 -0600
+Subject: [PATCH 2/4] Follow workspace_wraparound in the overview swipe
+
+cosmic-comp wraps its own workspace swipe and next/previous shortcuts
+from the last workspace to the first (and back) when
+`workspace_wraparound` is on, which is the default. The overview swipe
+now does the same: the strip position is unbounded, pages map to
+workspaces modulo the count, and the settle animation keeps the lap so
+it slides across the seam instead of rewinding. With the option off it
+keeps the rubber band at both ends.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Hjqk95EtWyxLg63zr44Nju
+---
+ src/main.rs     |  56 ++++++++++++++++++---------
+ src/swipe.rs    | 101 ++++++++++++++++++++++++++++++++++++++----------
+ src/view/mod.rs |  12 +++++-
+ 3 files changed, 128 insertions(+), 41 deletions(-)
+
+diff --git a/src/main.rs b/src/main.rs
+index a531815..5a7d19f 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -384,27 +384,33 @@ impl App {
+             let Some(active) = workspaces.iter().position(|w| w.is_active()) else {
+                 continue;
+             };
++            // In pages, as `swipe::Gesture::pos` (unbounded with wraparound).
+             let (mut lo, mut hi) = (active as f32, active as f32);
+             if let Some(pos) = self.strip_pos(&output.handle) {
+                 lo = lo.min(pos.floor());
+                 hi = hi.max(pos.ceil());
+             }
+-            let settle_target = self
++            if let Some(page) = self
+                 .settle
+                 .as_ref()
+                 .filter(|s| s.output == output.handle)
+-                .and_then(|s| workspaces.iter().position(|w| w.handle() == &s.target));
+-            if let Some(idx) = settle_target {
+-                lo = lo.min(idx as f32);
+-                hi = hi.max(idx as f32);
++                .and_then(|s| self.settle_target_page(s))
++            {
++                lo = lo.min(page);
++                hi = hi.max(page);
+             }
+-            let last = workspaces.len() - 1;
+-            let lo = (lo - 1.0).max(0.0) as usize;
+-            let hi = ((hi + 1.0) as usize).min(last);
+-            for workspace in &workspaces[lo..=hi] {
+-                if !handles.contains(workspace.handle()) {
+-                    handles.push(workspace.handle().clone());
++            let wrap = self.conf.workspace_config.workspace_wraparound;
++            // At most one lap: further pages would only repeat workspaces.
++            let hi = (hi + 1.0).min(lo - 1.0 + workspaces.len() as f32);
++            let mut page = lo - 1.0;
++            while page <= hi {
++                if let Some(idx) = swipe::page_index(page, workspaces.len(), wrap) {
++                    let handle = workspaces[idx].handle();
++                    if !handles.contains(handle) {
++                        handles.push(handle.clone());
++                    }
+                 }
++                page += 1.0;
+             }
+         }
+         handles
+@@ -463,6 +469,15 @@ impl App {
+         Some(settle.pos(idx, std::time::Instant::now()))
+     }
+ 
++    /// Page the settle animation is heading to, in `strip_pos` space.
++    fn settle_target_page(&self, settle: &swipe::Settle) -> Option<f32> {
++        let idx = self
++            .workspaces
++            .for_output(&settle.output)
++            .position(|w| w.handle() == &settle.target)?;
++        Some(settle.target_page(idx))
++    }
++
+     /// End the settle animation and switch to the workspace it landed on.
+     fn finish_settle(&mut self) {
+         if let Some(settle) = self.settle.take() {
+@@ -518,6 +533,7 @@ impl App {
+                     self.swipe_deaccel,
+                     start,
+                     count,
++                    self.conf.workspace_config.workspace_wraparound,
+                 ));
+                 self.settle = None;
+             }
+@@ -534,19 +550,22 @@ impl App {
+                 if !gesture.is_active() {
+                     return;
+                 }
+-                let target_idx = gesture.target(time);
+-                log::debug!(
+-                    "swipe end: pos={:.2} velocity={:.2} cancelled={cancelled} -> target {target_idx}",
+-                    gesture.pos(),
+-                    gesture.velocity(time)
+-                );
++                let target_page = gesture.target(time);
+                 let workspaces = self
+                     .workspaces
+                     .for_output(&gesture.output)
+                     .collect::<Vec<_>>();
+-                let Some(target) = workspaces.get(target_idx) else {
++                let wrap = self.conf.workspace_config.workspace_wraparound;
++                let Some(target_idx) = swipe::page_index(target_page, workspaces.len(), wrap)
++                else {
+                     return;
+                 };
++                log::debug!(
++                    "swipe end: pos={:.2} velocity={:.2} cancelled={cancelled} -> target {target_idx} (page {target_page})",
++                    gesture.pos(),
++                    gesture.velocity(time)
++                );
++                let target = workspaces[target_idx];
+                 // The workspace is activated when the animation ends: the
+                 // compositor may add/remove empty workspaces on a switch,
+                 // which would reflow the bar and shift indices mid-animation.
+@@ -554,6 +573,7 @@ impl App {
+                     gesture.output.clone(),
+                     target.handle().clone(),
+                     target_idx,
++                    target_page,
+                     gesture.pos(),
+                     gesture.velocity(time),
+                 ));
+diff --git a/src/swipe.rs b/src/swipe.rs
+index 905933e..81a3355 100644
+--- a/src/swipe.rs
++++ b/src/swipe.rs
+@@ -152,6 +152,9 @@ pub struct Gesture {
+     start_pos: f32,
+     /// Number of workspaces on the output.
+     count: usize,
++    /// cosmic-comp's `workspace_wraparound`: past the last workspace comes
++    /// the first one again (and the other way round) instead of a rubber band.
++    wrap: bool,
+     /// `None` until the fingers moved far enough to pick an axis; then
+     /// whether that axis is the workspace axis.
+     locked: Option<bool>,
+@@ -171,6 +174,7 @@ impl Gesture {
+         deaccel: Deaccel,
+         start_pos: f32,
+         count: usize,
++        wrap: bool,
+     ) -> Self {
+         Self {
+             output,
+@@ -179,6 +183,7 @@ impl Gesture {
+             deaccel,
+             start_pos,
+             count,
++            wrap: wraps(wrap, count),
+             locked: None,
+             pending: (0.0, 0.0),
+             moved: 0.0,
+@@ -262,11 +267,15 @@ impl Gesture {
+         self.start_pos + self.moved as f32
+     }
+ 
+-    /// Position to draw, with rubber banding past both ends.
++    /// Position to draw, with rubber banding past both ends. With
++    /// wraparound it is unbounded: `-1.0` is the last workspace, reached
++    /// from the first one (see [`page_index`]).
+     pub fn pos(&self) -> f32 {
+         let last = self.count.saturating_sub(1) as f32;
+         let raw = self.raw_pos();
+-        if raw < 0.0 {
++        if self.wrap {
++            raw
++        } else if raw < 0.0 {
+             -rubber_band(-raw)
+         } else if raw > last {
+             last + rubber_band(raw - last)
+@@ -292,16 +301,40 @@ impl Gesture {
+         (total as f32 / dt).clamp(-MAX_RELEASE_VELOCITY, MAX_RELEASE_VELOCITY)
+     }
+ 
+-    /// Workspace index to settle on after release at `now` (ms).
++    /// Page to settle on after release at `now` (ms), in the same space
++    /// as [`Gesture::pos`]: always a valid index without wraparound, any
++    /// whole number with it (map it with [`page_index`]).
+     ///
+     /// libinput marks the end `cancelled` whenever the finger count changes
+     /// first (e.g. lifting fingers one at a time), so like cosmic-comp this
+     /// ignores it and lands where the fingers left the strip.
+-    pub fn target(&self, now: u32) -> usize {
++    pub fn target(&self, now: u32) -> f32 {
+         let last = self.count.saturating_sub(1) as f32;
+         let pos = self.pos();
+         let projected = (pos + self.velocity(now) * PROJECTION_S).round();
+-        projected.clamp(0.0, last) as usize
++        if self.wrap {
++            projected
++        } else {
++            projected.clamp(0.0, last)
++        }
++    }
++}
++
++/// Wraparound only means something with two or more workspaces.
++pub fn wraps(wraparound: bool, count: usize) -> bool {
++    wraparound && count > 1
++}
++
++/// Workspace index shown at whole page `page`, or `None` past the ends
++/// without wraparound.
++pub fn page_index(page: f32, count: usize, wraparound: bool) -> Option<usize> {
++    if count == 0 {
++        return None;
++    }
++    if wraps(wraparound, count) {
++        Some((page as i64).rem_euclid(count as i64) as usize)
++    } else {
++        (page >= 0.0 && page <= (count - 1) as f32).then_some(page as usize)
+     }
+ }
+ 
+@@ -350,6 +383,9 @@ impl Spring {
+ pub struct Settle {
+     pub output: wl_output::WlOutput,
+     pub target: ExtWorkspaceHandleV1,
++    /// Target page minus the target's index: a multiple of the workspace
++    /// count when the swipe wrapped around, else 0.
++    lap: f32,
+     spring: Spring,
+     start: Instant,
+ }
+@@ -359,13 +395,15 @@ impl Settle {
+         output: wl_output::WlOutput,
+         target: ExtWorkspaceHandleV1,
+         target_idx: usize,
++        target_page: f32,
+         pos: f32,
+         velocity: f32,
+     ) -> Self {
+         Self {
+             output,
+             target,
+-            spring: Spring::new(pos - target_idx as f32, velocity),
++            lap: target_page - target_idx as f32,
++            spring: Spring::new(pos - target_page, velocity),
+             start: Instant::now(),
+         }
+     }
+@@ -375,9 +413,14 @@ impl Settle {
+             .at(now.saturating_duration_since(self.start).as_secs_f32())
+     }
+ 
++    /// Page the animation ends on, given where the target workspace is now.
++    pub fn target_page(&self, target_idx: usize) -> f32 {
++        target_idx as f32 + self.lap
++    }
++
+     /// Current position, given where the target workspace is now.
+     pub fn pos(&self, target_idx: usize, now: Instant) -> f32 {
+-        target_idx as f32 + self.offset_and_velocity(now).0
++        self.target_page(target_idx) + self.offset_and_velocity(now).0
+     }
+ 
+     pub fn is_done(&self, now: Instant) -> bool {
+@@ -388,20 +431,16 @@ impl Settle {
+ 
+ /// Indices of the (at most two) workspaces visible at `pos`, with the offset
+ /// of each page from the viewport in pages.
+-pub fn visible_pages(pos: f32, count: usize) -> Vec<(usize, f32)> {
+-    if count == 0 {
+-        return Vec::new();
+-    }
+-    let last = count - 1;
++pub fn visible_pages(pos: f32, count: usize, wraparound: bool) -> Vec<(usize, f32)> {
+     let lo = pos.floor();
+     let mut pages = Vec::with_capacity(2);
+-    for idx in [lo, lo + 1.0] {
+-        if idx < 0.0 || idx > last as f32 {
++    for page in [lo, lo + 1.0] {
++        let offset = page - pos;
++        if offset.abs() >= 1.0 {
+             continue;
+         }
+-        let offset = idx - pos;
+-        if offset.abs() < 1.0 {
+-            pages.push((idx as usize, offset));
++        if let Some(idx) = page_index(page, count, wraparound) {
++            pages.push((idx, offset));
+         }
+     }
+     pages
+@@ -413,11 +452,31 @@ mod tests {
+ 
+     #[test]
+     fn visible_pages_at_rest_and_between() {
+-        assert_eq!(visible_pages(1.0, 3), vec![(1, 0.0)]);
+-        assert_eq!(visible_pages(1.25, 3), vec![(1, -0.25), (2, 0.75)]);
++        assert_eq!(visible_pages(1.0, 3, false), vec![(1, 0.0)]);
++        assert_eq!(visible_pages(1.25, 3, false), vec![(1, -0.25), (2, 0.75)]);
+         // Rubber band past the ends only shows the end page.
+-        assert_eq!(visible_pages(-0.1, 3).len(), 1);
+-        assert_eq!(visible_pages(2.1, 3).len(), 1);
++        assert_eq!(visible_pages(-0.1, 3, false).len(), 1);
++        assert_eq!(visible_pages(2.1, 3, false).len(), 1);
++    }
++
++    #[test]
++    fn visible_pages_wrap_around() {
++        // Between the last and the first workspace, both ways.
++        assert_eq!(visible_pages(-0.25, 3, true), vec![(2, -0.75), (0, 0.25)]);
++        assert_eq!(visible_pages(2.5, 3, true), vec![(2, -0.5), (0, 0.5)]);
++        // Several laps away.
++        assert_eq!(visible_pages(-4.0, 3, true), vec![(2, 0.0)]);
++        // A single workspace never wraps.
++        assert_eq!(visible_pages(-0.1, 1, true), vec![(0, 0.1)]);
++    }
++
++    #[test]
++    fn page_index_clamps_or_wraps() {
++        assert_eq!(page_index(-1.0, 4, false), None);
++        assert_eq!(page_index(4.0, 4, false), None);
++        assert_eq!(page_index(-1.0, 4, true), Some(3));
++        assert_eq!(page_index(4.0, 4, true), Some(0));
++        assert_eq!(page_index(0.0, 0, true), None);
+     }
+ 
+     #[test]
+diff --git a/src/view/mod.rs b/src/view/mod.rs
+index 4b98bfe..94c89aa 100644
+--- a/src/view/mod.rs
++++ b/src/view/mod.rs
+@@ -106,7 +106,14 @@ pub(crate) fn layer_surface<'a>(
+             .workspaces
+             .for_output(&surface.output)
+             .collect::<Vec<_>>();
+-        let idx = (pos.round().max(0.0) as usize).min(workspaces.len().checked_sub(1)?);
++        let wrap = app.conf.workspace_config.workspace_wraparound;
++        let last = workspaces.len().checked_sub(1)? as f32;
++        let page = if crate::swipe::wraps(wrap, workspaces.len()) {
++            pos.round()
++        } else {
++            pos.round().clamp(0.0, last)
++        };
++        let idx = crate::swipe::page_index(page, workspaces.len(), wrap)?;
+         Some(workspaces[idx].handle())
+     });
+     let sidebar = workspaces_sidebar(
+@@ -135,7 +142,8 @@ pub(crate) fn layer_surface<'a>(
+             .workspaces
+             .for_output(&surface.output)
+             .collect::<Vec<_>>();
+-        let pages = crate::swipe::visible_pages(pos, workspaces.len())
++        let wrap = app.conf.workspace_config.workspace_wraparound;
++        let pages = crate::swipe::visible_pages(pos, workspaces.len(), wrap)
+             .into_iter()
+             .map(|(idx, offset)| {
+                 let page = toplevel_previews(
+-- 
+2.43.0
+
