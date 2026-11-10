@@ -170,9 +170,11 @@ distributed here.
 ## License
 
 - Patches and the binaries built from them: **GPL-3.0**, the license of
-  cosmic-workspaces-epoch. Every release tarball carries the license text and
-  a `SOURCE` file with the exact upstream revision and patches.
+  cosmic-workspaces-epoch and cosmic-comp; the text is in `patches/LICENSE`.
+  Every release tarball carries it too, plus a `SOURCE` file with the exact
+  upstream revision, the patches, and the matching branch of the fork.
 - Everything else (installer, scripts, site, notes): **MIT**, see `LICENSE`.
+  They contain no COSMIC code; the installer only downloads the binaries.
 
 COSMIC Overview Swipe is an independent project, not affiliated with or
 endorsed by System76. COSMIC and Pop!_OS are trademarks of System76.

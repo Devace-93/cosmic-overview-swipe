@@ -39,6 +39,11 @@ jobs:
             runner: ubuntu-24.04
           - arch: aarch64
             runner: ubuntu-24.04-arm
+          # Branch of the fork with the same patched tree and its history.
+          - rev: 954a45c
+            fork_branch: overview-swipe-954a45c
+          - rev: cb953ea
+            fork_branch: overview-swipe-wraparound
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -81,6 +86,7 @@ jobs:
             echo "Built from $UPSTREAM at ${{ matrix.rev }}"
             echo "with the patches in https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}/patches/cosmic-workspaces/${{ matrix.rev }}:"
             git -C src log --format='  %h %s' "${{ matrix.rev }}..HEAD"
+            echo "The same patched tree, as a git branch: https://github.com/Devace-93/cosmic-workspaces-epoch/tree/${{ matrix.fork_branch }}"
             echo "Installer and documentation: https://cosmic-swipe.3m4.net"
           } > "$name/SOURCE"
           cat "$name/SOURCE"
