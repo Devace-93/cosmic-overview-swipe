@@ -123,7 +123,7 @@ comp-rollback)
 try)
     [ -x "$BIN" ] || { echo "run '$0 build' first" >&2; exit 1; }
     mkdir -p "$(dirname "$TRY_LINK")"
-    [ -f "$ENV_FILE" ] || printf '%s\n' 'RUST_LOG=cosmic_workspaces=debug' '#COSMIC_WORKSPACES_SWIPE_MM=60' > "$ENV_FILE"
+    [ -f "$ENV_FILE" ] || printf '%s\n' 'RUST_LOG=cosmic_workspaces=debug' '#COSMIC_WORKSPACES_SWIPE_MM=20' > "$ENV_FILE"
     rm -f "$TRY_LINK"
     cat > "$TRY_LINK" <<WRAPPER
 #!/bin/sh

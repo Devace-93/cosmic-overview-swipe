@@ -131,6 +131,22 @@ build` picks the directory matching the installed revision.
   VM with 3 workspaces: on, 1 -> 3 and 3 -> 1; off, stays on 1 and on 3.
   This also makes the cosmic-comp no-wrap patch below obsolete on new
   versions (turn the option off instead).
+- **20 mm per workspace (`0004`)**: tested in the VM with a Magic Mouse
+  paired there (Bluetooth adapter passed through) and mousetouch 0.1.12.
+  In horizontal layout mousetouch swipes worked in and out of the
+  overview, with and without wraparound. In vertical layout they barely
+  moved the overview strip (`pos` 0.03-0.10) and snapped back: 60 mm was
+  ~4x cosmic-comp's own swipe distance (150 accelerated units, ~15 mm),
+  which synthetic devices are tuned to. With 20 mm a real touchpad still
+  feels right (confirmed with the laptop touchpad) and mousetouch works
+  once its vertical strokes are scaled up (see below).
+- mousetouch findings (fixes belong in the mousetouch repo): it does not
+  detect COSMIC's workspace layout (`axis` stays `horizontal`, so in
+  vertical layout swipes do nothing until set by hand), and the Magic
+  Mouse reports vertical strokes ~3x shorter than horizontal ones
+  (15-25 mm vs 60-75 mm, from the kernel's axis resolutions 26 / 70
+  units/mm). Sensitivity 1.0 instead of 0.4 makes vertical swipes in the
+  overview work.
 
 ## What did not work (and why)
 
@@ -139,8 +155,8 @@ build` picks the directory matching the installed revision.
   (`filter-touchpad.c`, `touchpad_accel_profile_linear`) ranges from ~0.09
   to ~1.4 (≈16x), so slow swipes barely moved and fast ones overshot. Fix:
   `swipe::Deaccel` inverts that curve (speed estimated over 40 ms) to get
-  finger travel in mm; 60 mm = one workspace
-  (`COSMIC_WORKSPACES_SWIPE_MM` to tune).
+  finger travel in mm; one workspace = 60 mm in the `954a45c` patch,
+  20 mm in the `cb953ea` series (`COSMIC_WORKSPACES_SWIPE_MM` to tune).
 - **Direction**: first version read `natural_scroll` from the wrong place,
   then "always follow the fingers" broke mousetouch (Magic Mouse): it adapts
   its synthetic swipe to cosmic-comp's convention, so it came out reversed in
