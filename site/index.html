@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COSMIC Overview Swipe — touchpad swipes in the workspace overview</title>
+<meta name="description" content="Swipe between workspaces inside the COSMIC workspace overview on Pop!_OS, with the strip following your fingers like macOS Mission Control. Prebuilt, no sudo, easy to remove.">
+<link rel="canonical" href="https://cosmic-swipe.3m4.net/">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0e7f86">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="COSMIC Overview Swipe">
+<meta property="og:title" content="COSMIC Overview Swipe — touchpad swipes in the workspace overview">
+<meta property="og:description" content="Swipe between workspaces inside the COSMIC workspace overview on Pop!_OS, with the strip following your fingers. Prebuilt, no sudo, easy to remove.">
+<meta property="og:url" content="https://cosmic-swipe.3m4.net/">
+<meta property="og:image" content="https://cosmic-swipe.3m4.net/demo.gif">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="COSMIC Overview Swipe — touchpad swipes in the workspace overview">
+<meta name="twitter:description" content="Swipe between workspaces inside the COSMIC workspace overview on Pop!_OS.">
+<meta name="twitter:image" content="https://cosmic-swipe.3m4.net/demo.gif">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<script>
+  // Apply the saved theme override before first paint to avoid a flash.
+  // Shared key with the other 3m4.net pages.
+  try {
+    const theme = localStorage.getItem('3m4.theme');
+    if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+  } catch (e) {}
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="14" width="24" height="36" rx="5" fill="none" stroke="currentColor" stroke-width="4"/><rect x="36" y="14" width="24" height="36" rx="5" fill="none" stroke="currentColor" stroke-width="4" opacity=".45"/><path d="M14 58h36m-8-5 8 5-8 5" stroke="var(--accent)" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      COSMIC Overview Swipe
+    </a>
+    <nav>
+      <a href="#features" class="hide-sm" data-i18n="navFeatures">Features</a>
+      <a href="#install" class="hide-sm" data-i18n="navInstall">Install</a>
+      <a href="#settings" class="hide-sm" data-i18n="navSettings">Settings</a>
+      <a href="#help" class="hide-sm" data-i18n="navHelp">Help</a>
+      <a href="https://github.com/Devace-93/cosmic-overview-swipe" class="hide-sm">GitHub</a>
+      <div class="top-controls">
+        <button id="theme-toggle" type="button" aria-label="Theme">🌙</button>
+        <div id="lang-sel"></div>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <h1><span data-i18n="heroTitle">Swipe between workspaces</span><br><span class="accent" data-i18n="heroTitleAccent">inside the COSMIC overview.</span></h1>
+    <p class="lead" data-i18n-html="heroLede">
+      On Pop!_OS a 3- or 4-finger touchpad swipe switches workspaces, but does nothing while the workspace overview
+      (<code>Super+W</code>) is open. This patch makes the overview follow your fingers, like Mission Control on macOS:
+      the workspaces slide with you and land on the one you aim for. It installs without sudo and leaves your system packages alone.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="#install" data-i18n="ctaInstall">Install</a>
+      <a class="btn" href="https://github.com/Devace-93/cosmic-overview-swipe" data-i18n="ctaSource">Source on GitHub</a>
+      <a class="btn" href="https://github.com/Devace-93/cosmic-overview-swipe/releases" data-i18n="ctaReleases">Releases</a>
+    </div>
+    <div class="pills">
+      <span class="pill">Pop!_OS 24.04 · COSMIC</span>
+      <span class="pill" data-i18n="pillFingers">Touchpad, 3 or 4 fingers</span>
+      <span class="pill" data-i18n="pillNoSudo">No sudo</span>
+      <span class="pill" data-i18n="pillMouse">Magic Mouse with MouseTouch</span>
+      <span class="pill">GPL-3.0</span>
+    </div>
+    <figure class="demo">
+      <img src="demo.gif" width="800" height="421" alt="The COSMIC workspace overview following a touchpad swipe from one workspace to the next" data-i18n-alt="demoAlt" loading="lazy">
+      <figcaption data-i18n="demoCaption">The overview open with Super+W: a swipe slides the workspaces under the fingers and settles on the next one.</figcaption>
+    </figure>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <h2 data-i18n="featuresTitle">What changes</h2>
+      <p class="sub" data-i18n="featuresSub">Only the workspace overview. Outside it, COSMIC keeps handling the swipe exactly as before.</p>
+      <div class="grid">
+        <div class="card"><div class="g" data-i18n="f1k">Follows your fingers</div><div class="r" data-i18n="f1r">1:1, live</div><div class="n" data-i18n="f1n">Pause and it pauses; go back and it goes back. Fast and slow swipes cover the same distance per workspace.</div></div>
+        <div class="card"><div class="g" data-i18n="f2k">Lands where you aim</div><div class="r" data-i18n="f2r">Release velocity</div><div class="n" data-i18n="f2n">A flick moves on to the next workspace, a slow drag settles on the nearest one, and a long fast swipe can skip several.</div></div>
+        <div class="card"><div class="g" data-i18n="f3k">Both layouts</div><div class="r" data-i18n="f3r">Horizontal or vertical</div><div class="n" data-i18n="f3n">Swipe along the axis COSMIC lays your workspaces out on, in the same direction as its own swipe.</div></div>
+        <div class="card"><div class="g" data-i18n="f4k">First ↔ last</div><div class="r" data-i18n="f4r">Wraparound like COSMIC</div><div class="n" data-i18n="f4n">Past the last workspace comes the first one when COSMIC wraps around; otherwise it stops with a little bounce.</div></div>
+        <div class="card"><div class="g" data-i18n="f5k">Magic Mouse too</div><div class="r" data-i18n="f5r">With MouseTouch</div><div class="n" data-i18n-html="f5n">Two-finger swipes on an Apple Magic Mouse work inside the overview as well, through <a href="https://mouse.3m4.net">MouseTouch</a>.</div></div>
+        <div class="card"><div class="g" data-i18n="f6k">Safe to try</div><div class="r" data-i18n="f6r">One command to remove</div><div class="n" data-i18n="f6n">Nothing in /usr changes. After a system update with no matching build, COSMIC simply starts its own overview again.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2 data-i18n="installTitle">Install</h2>
+      <p class="sub" data-i18n-html="installSub">For <strong>Pop!_OS 24.04 with COSMIC</strong>, x86_64 or ARM. The patched overview has to match your exact COSMIC version, so the installer picks the build for the version you have, checks it and refuses if there is none.</p>
+
+      <h3 data-i18n="checkTitle">1. Check your COSMIC version</h3>
+      <pre><code>dpkg-query -W cosmic-workspaces</code></pre>
+      <div class="tbl versions" style="margin-top:12px">
+        <table>
+          <tr><th data-i18n="thVersion">Version shown</th><th data-i18n="thRevision">Revision</th><th data-i18n="thStatus">Status</th></tr>
+          <tr><td><code>1.0.12~1790783807~24.04~cb953ea</code></td><td><code>cb953ea</code></td><td data-i18n="statusLatest">Supported (latest COSMIC at the time of writing)</td></tr>
+          <tr><td><code>0.1.0~1765315332~24.04~954a45c</code></td><td><code>954a45c</code></td><td data-i18n="statusOlder">Supported (earlier COSMIC release)</td></tr>
+        </table>
+      </div>
+      <p class="sub" style="margin-top:10px" data-i18n-html="checkNote">The last part of the version, after the final <code>~</code>, is the revision. If yours is not listed, the installer stops without changing anything; see <a href="#help">Help</a>.</p>
+
+      <h3 data-i18n="runTitle">2. Install</h3>
+      <pre><code>curl -fsSL https://raw.githubusercontent.com/Devace-93/cosmic-overview-swipe/main/get.sh | sh</code></pre>
+      <ul class="plain">
+        <li data-i18n-html="run1">Downloads the build for your revision from the latest <a href="https://github.com/Devace-93/cosmic-overview-swipe/releases">release</a> and verifies its SHA-256 checksum.</li>
+        <li data-i18n-html="run2">Puts it in <code>~/.local/opt/overview-swipe/</code> and adds a small wrapper at <code>~/.local/bin/cosmic-workspaces</code>, which COSMIC starts instead of the system overview.</li>
+        <li data-i18n="run3">Restarts the overview. If it says your session does not look in ~/.local/bin yet, log out and back in once.</li>
+      </ul>
+
+      <h3 data-i18n="useTitle">3. Use it</h3>
+      <p class="sub" data-i18n-html="useSub">Press <code>Super+W</code> (or click <em>Workspaces</em> in the panel), then swipe with 3 or 4 fingers on the touchpad.</p>
+
+      <div class="two" style="margin-top:28px">
+        <div>
+          <h3 style="margin-top:0" data-i18n="updateTitle">After a system update</h3>
+          <p class="sub" data-i18n="updateSub">When Pop!_OS updates COSMIC to a new revision, the wrapper notices and starts the stock overview, so nothing breaks; the swipe is just off. Run the install line again: it fetches the build for the new revision as soon as there is one.</p>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/Devace-93/cosmic-overview-swipe/main/get.sh | sh -s status</code></pre>
+        </div>
+        <div>
+          <h3 style="margin-top:0" data-i18n="removeTitle">Remove</h3>
+          <p class="sub" data-i18n="removeSub">Deletes the wrapper and the downloaded build and restarts the stock overview. Your settings file is kept.</p>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/Devace-93/cosmic-overview-swipe/main/get.sh | sh -s uninstall</code></pre>
+        </div>
+      </div>
+
+      <h3 data-i18n="srcTitle">Build it yourself</h3>
+      <p class="sub" data-i18n-html="srcSub">Prefer to compile? The repository has the patch series per revision and a script that clones upstream at your revision, applies them and builds (needs Rust and a few <code>-dev</code> packages, about ten minutes).</p>
+      <pre><code>git clone https://github.com/Devace-93/cosmic-overview-swipe
+cd cosmic-overview-swipe
+scripts/overview-swipe.sh deps    # build dependencies (sudo apt)
+scripts/overview-swipe.sh build   # upstream at your revision + patches
+scripts/overview-swipe.sh try     # same wrapper as the installer; undo: untry</code></pre>
+    </div>
+  </section>
+
+  <section id="settings">
+    <div class="wrap">
+      <div class="two">
+        <div>
+          <h2 data-i18n="settingsTitle">Settings</h2>
+          <p class="sub" data-i18n-html="settingsSub">Optional. The installer creates <code>~/.config/cosmic-overview-swipe.env</code> with the settings commented out. Edit it, then restart the overview:</p>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/Devace-93/cosmic-overview-swipe/main/get.sh | sh -s restart</code></pre>
+        </div>
+        <div>
+          <pre><code># finger travel (mm) per workspace; higher = slower. Default 20.
+COSMIC_WORKSPACES_SWIPE_MM=35
+
+# earlier COSMIC (954a45c) only: stop at the first/last workspace
+# instead of wrapping around. Newer COSMIC follows its own setting.
+COSMIC_WORKSPACES_SWIPE_WRAP=0</code></pre>
+          <div class="note" data-i18n-html="settingsNote">The swipe direction follows COSMIC's <em>natural scrolling</em> setting for the touchpad, the same as its swipe outside the overview.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <h2 data-i18n="howTitle">How it works</h2>
+      <p class="sub" data-i18n-html="howSub">While the overview is open, COSMIC's compositor stops switching workspaces itself and hands the touchpad swipe to the overview, which until now did not listen. The patch adds that part to <code>cosmic-workspaces</code>, the program that draws the overview.</p>
+      <div class="grid">
+        <div class="card"><div class="g">1</div><div class="r" data-i18n="h1r">Receive the swipe</div><div class="n" data-i18n="h1n">The overview subscribes to touchpad swipe gestures from the compositor.</div></div>
+        <div class="card"><div class="g">2</div><div class="r" data-i18n="h2r">Measure real finger travel</div><div class="n" data-i18n="h2n">Pointer acceleration is undone, so the distance per workspace does not depend on how fast you swipe.</div></div>
+        <div class="card"><div class="g">3</div><div class="r" data-i18n="h3r">Slide the workspaces</div><div class="n" data-i18n="h3n">The windows of the neighbouring workspaces are captured ahead of time, so they slide in fully drawn.</div></div>
+        <div class="card"><div class="g">4</div><div class="r" data-i18n="h4r">Settle and switch</div><div class="n" data-i18n="h4n">A spring animation carries the release velocity to the target, then the overview asks COSMIC to switch to it.</div></div>
+      </div>
+      <div class="note" style="margin-top:22px" data-i18n-html="statusNote"><strong>Why is this not in COSMIC?</strong> It is not submitted to System76 for now, so it is distributed here: prebuilt for the exact COSMIC versions it was tested on, with the source and patches in the <a href="https://github.com/Devace-93/cosmic-overview-swipe">repository</a>. The series also fixes an overview crash with windows on several workspaces.</div>
+    </div>
+  </section>
+
+  <section id="help">
+    <div class="wrap">
+      <h2 data-i18n="helpTitle">Troubleshooting</h2>
+      <pre><code>curl -fsSL https://raw.githubusercontent.com/Devace-93/cosmic-overview-swipe/main/get.sh | sh -s status
+journalctl --user -b | grep -i cosmic_workspaces</code></pre>
+      <div class="tbl" style="margin-top:18px">
+        <table>
+          <tr><th data-i18n="thSymptom">Symptom</th><th data-i18n="thCheck">Check</th></tr>
+          <tr><td data-i18n="s1">"No build for cosmic-workspaces …"</td><td data-i18n-html="c1">Your COSMIC revision is newer or older than the releases. Nothing was changed. Watch the <a href="https://github.com/Devace-93/cosmic-overview-swipe/releases">releases</a>, or <a href="https://github.com/Devace-93/cosmic-overview-swipe/issues">open an issue</a> with the output of <code>dpkg-query -W cosmic-workspaces</code>.</td></tr>
+          <tr><td data-i18n="s2">Swiping in the overview does nothing</td><td data-i18n-html="c2">Run <code>status</code>. "Build for this revision: no" means COSMIC was updated: run the install line again. If the stock overview is running, log out and back in once.</td></tr>
+          <tr><td data-i18n="s3">Too fast or too slow</td><td data-i18n-html="c3">Set <code>COSMIC_WORKSPACES_SWIPE_MM</code> (default 20; 30–40 feels calmer on some touchpads) and run <code>restart</code>.</td></tr>
+          <tr><td data-i18n="s4">Goes the wrong way</td><td data-i18n="c4">It follows the touchpad natural scrolling setting in COSMIC Settings, like COSMIC's own swipe.</td></tr>
+          <tr><td data-i18n="s5">Magic Mouse swipes do nothing</td><td data-i18n-html="c5">Install <a href="https://mouse.3m4.net">MouseTouch</a> 0.1.13 or newer, which follows COSMIC's horizontal or vertical layout.</td></tr>
+          <tr><td data-i18n="s6">I want the stock overview back</td><td data-i18n-html="c6">Run <code>uninstall</code>. Nothing else on the system was touched.</td></tr>
+        </table>
+      </div>
+      <p class="sub" style="margin-top:18px" data-i18n-html="helpMore">Details, the patch series and test notes are in the <a href="https://github.com/Devace-93/cosmic-overview-swipe">repository</a>. Questions or another COSMIC version: <a href="https://github.com/Devace-93/cosmic-overview-swipe/issues">issues</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="links">
+      <a href="https://www.linkedin.com/in/enrique-magallon/" target="_blank" rel="noopener noreferrer"><span data-i18n="madeBy">Made by</span> Enrique Magallón</a>
+      <a href="https://github.com/Devace-93/cosmic-overview-swipe" data-i18n="source">Source</a>
+      <a href="https://mouse.3m4.net">MouseTouch</a>
+      <a href="https://info.3m4.net">info.3m4.net</a>
+    </p>
+    <p data-i18n="disclaimer">COSMIC Overview Swipe is an independent project, not affiliated with or endorsed by System76. COSMIC and Pop!_OS are trademarks of System76, used here only to describe what this works with.</p>
+    <p data-i18n="licenseLine">Patches and binaries: GPL-3.0, like COSMIC. Installer and this site: MIT.</p>
+  </div>
+</footer>
+
+<script src="i18n.js"></script>
+<script>
+  // Copy buttons
+  document.querySelectorAll('pre').forEach(pre => {
+    const b = document.createElement('button');
+    b.className = 'copy'; b.type = 'button'; b.textContent = 'Copy';
+    b.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(pre.querySelector('code').innerText);
+        b.textContent = 'Copied'; b.classList.add('done');
+        setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1500);
+      } catch (e) { b.textContent = 'Select & copy'; }
+    });
+    pre.appendChild(b);
+  });
+
+  CosmicSwipeI18n.init();
+</script>
+</body>
+</html>
