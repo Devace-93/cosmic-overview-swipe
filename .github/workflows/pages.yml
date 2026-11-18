@@ -32,7 +32,7 @@ jobs:
         run: |
           python3 tools/site-i18n.py build
           mkdir _site
-          cp site/index.html site/style.css site/i18n.js site/icon.svg site/demo.gif site/demo.webm site/CNAME _site/
+          cp site/index.html site/style.css site/i18n.js site/icon.svg site/demo.gif site/demo.webm site/CNAME site/robots.txt site/sitemap.xml _site/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
